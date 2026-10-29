@@ -22,7 +22,6 @@ except:
 
 st.set_page_config(page_title="CleanData LAI - Data Cleaning", page_icon="🧹", layout="wide")
 
-# Email
 try:
     EMAIL_USER = st.secrets["EMAIL_USER"]
     EMAIL_PASS = st.secrets["EMAIL_PASS"]
@@ -47,7 +46,6 @@ def send_email_code(to_email, code):
     except Exception as e:
         return False, str(e)
 
-# --- READ ANY FILE ---
 def read_any_file(uploaded_file):
     name = uploaded_file.name.lower()
     try:
@@ -57,7 +55,7 @@ def read_any_file(uploaded_file):
             return pd.read_excel(uploaded_file)
         elif name.endswith('.pdf'):
             if not HAS_PYMUPDF:
-                st.error("PDF installing, wait")
+                st.error("PDF library loading, try again in 1 min")
                 return None
             doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
             text = ""
@@ -75,31 +73,46 @@ def read_any_file(uploaded_file):
             return pd.DataFrame({"text": lines})
         elif name.endswith(('.png','.jpg','.jpeg')):
             if not HAS_OCR:
-                st.error("OCR installing, wait")
+                st.error("OCR loading, try again in 1 min")
                 return None
             image = Image.open(uploaded_file)
+            image = image.convert('L')
+            w, h = image.size
+            image = image.resize((w*2, h*2))
             text = pytesseract.image_to_string(image)
             st.text(text[:3000])
+            
             lines = [l for l in text.split('\n') if l.strip()]
-            data = []
+            cleaned_lines = []
             for l in lines:
-                # Skip notes
-                if 'NOTES' in l or 'Total collected' in l or 'KWAMASHU' in l or 'Date: 15' in l or 'Full Name' in l or '---' in l:
+                if any(x in l for x in ['NOTES','Total collected','KWAMASHU GENERAL','Date: 15','Book No','Full Name','---','PLEASE CLEAN']):
                     continue
-                parts = re.split(r'\s{2,}|\t', l)
-                parts = [x.strip() for x in parts if x.strip()]
-                if len(parts) < 3:
-                    parts = l.split()
-                    # Heuristic: try to rebuild
-                    if len(parts) >= 4:
-                        # Name is first 2 words, phone next, email next
-                        pass
-                if parts:
-                    data.append(parts)
-            if not data:
-                return None
-            # Try to make 6 columns
-            df = pd.DataFrame(data)
+                if len(l.strip()) < 5:
+                    continue
+                cleaned_lines.append(l)
+            
+            data = []
+            for l in cleaned_lines:
+                email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', l)
+                phone_match = re.search(r'0\d{2}[\s\-]*\d{3}[\s\-]*\d{4}', l)
+                email = email_match.group(0) if email_match else ""
+                phone = phone_match.group(0) if phone_match else ""
+                
+                if phone_match:
+                    name_part = l[:phone_match.start()].strip()
+                elif email_match:
+                    name_part = l[:email_match.start()].strip()
+                else:
+                    name_part = " ".join(l.split()[0:2])
+                
+                parts = re.split(r'\s{2,}', l)
+                row = [name_part, phone, email, l, "", ""]
+                if len(parts) >= 4:
+                    row = parts[:6] + [""]*(6-len(parts))
+                
+                data.append(row[:6])
+            
+            df = pd.DataFrame(data, columns=["Full Name","Phone","Email","Amount","Location","Date"])
             return df
         else:
             st.error("Use CSV, XLSX, PDF, JPG, PNG")
@@ -108,82 +121,61 @@ def read_any_file(uploaded_file):
         st.error(f"Read error: {e}")
         return None
 
-# --- FINAL CLEANING WITH EXCEL FORMULAS ---
 def clean_dataframe(df):
     if df is None or df.empty:
         return df, 0, 0
     
     orig = len(df)
     
-    # If df has many columns, keep first 6
     if len(df.columns) > 6:
         df = df.iloc[:, :6]
     
-    # Rename to standard if no header
     if len(df.columns) == 6:
         df.columns = ["Full Name", "Phone", "Email", "Amount", "Location", "Date"]
     elif len(df.columns) >= 4:
-        # Guess
         cols = list(df.columns)
         df.columns = ["Full Name", "Phone", "Email", "Amount", "Location", "Date"][:len(cols)]
     
-    # Remove rows that are headers repeated
-    df = df[~df["Full Name"].astype(str).str.contains("Full Name|THANDI NENE.*Phone", na=False)]
+    df = df[~df["Full Name"].astype(str).str.contains("Full Name", na=False)]
     
-    # EXCEL FORMULA 1: TRIM - remove extra spaces everywhere
     for col in df.columns:
         df[col] = df[col].astype(str).apply(lambda x: re.sub(r'\s+', ' ', x).strip())
     
-    # EXCEL FORMULA 2: PROPER for Names - Sipho Dlamini not sipho dlamini or SIPHO DLAMINI
     if "Full Name" in df.columns:
         df["Full Name"] = df["Full Name"].astype(str).str.lower().str.title()
         df["Full Name"] = df["Full Name"].str.replace(r'\s+', ' ', regex=True)
-        # Remove invalid names
         df = df[~df["Full Name"].str.contains(r'^#ERROR|N/A|^Test@|^$|^\s*$', na=False, case=False)]
         df = df[df["Full Name"].str.len() > 2]
     
-    # EXCEL FORMULA 3: Phone - only digits, remove spaces, dashes, ext
     if "Phone" in df.columns:
         df["Phone"] = df["Phone"].astype(str).str.replace(r'[^0-9]', '', regex=True)
-        # Fix SA numbers: must be 10 digits starting 0
-        df["Phone"] = df["Phone"].apply(lambda x: x if len(x)==10 else ("0"+x[-9:] if len(x)>=9 else x))
     
-    # EXCEL FORMULA 4: LOWER for Emails + fix
     if "Email" in df.columns:
         df["Email"] = df["Email"].astype(str).str.lower().str.strip()
-        df["Email"] = df["Email"].str.replace(r'\.\.+', '.', regex=True)  # .. -> .
-        df["Email"] = df["Email"].str.replace(r'\s+', '', regex=True)  # no spaces
+        df["Email"] = df["Email"].str.replace(r'\.\.+', '.', regex=True)
+        df["Email"] = df["Email"].str.replace(r'\s+', '', regex=True)
         df["Email"] = df["Email"].str.replace(r',', '.', regex=False)
-        # Remove bad emails
         df = df[df["Email"].str.contains('@', na=False)]
         df = df[df["Email"].str.contains(r'\.', na=False)]
         df = df[~df["Email"].str.contains(r'@nene$|@zwane$|@\s*$|^musa$|^test', na=False)]
-        df = df[~df["Email"].str.match(r'^musa$|^bongani$|^test')]
     
-    # EXCEL FORMULA 5: PROPER for Location
     if "Location" in df.columns:
         df["Location"] = df["Location"].astype(str).str.lower().str.title()
         df["Location"] = df["Location"].str.replace(r'\s+', ' ', regex=True)
     
-    # Amount - remove R and spaces, keep number
     if "Amount" in df.columns:
-        df["Amount"] = df["Amount"].astype(str).str.replace(r'R|\s|,\s*', '', regex=True).str.replace(',', '', regex=False)
+        df["Amount"] = df["Amount"].astype(str).str.replace(r'R|\s', '', regex=True).str.replace(',', '', regex=False)
         df["Amount"] = df["Amount"].str.replace(r'[^0-9.]', '', regex=True)
     
-    # EXCEL FORMULA 6: REMOVE DUPLICATES - case insensitive!
-    # Create key for duplicate check
     df['_dup_key'] = df["Full Name"].astype(str).str.lower() + "_" + df["Phone"].astype(str)
     df = df.drop_duplicates(subset=['_dup_key'], keep='first')
     df = df.drop(columns=['_dup_key'])
-    
-    # Also drop exact duplicates
     df = df.drop_duplicates()
     
     cleaned = len(df)
     removed = orig - cleaned
     return df, removed, orig
 
-# --- AUTH ---
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 if 'users' not in st.session_state:
@@ -224,7 +216,7 @@ if not st.session_state.logged_in:
                 if success:
                     st.success(f"Code sent to {new_email}!")
                 else:
-                    st.warning(f"Code for testing: {code} - Email: {msg}")
+                    st.warning(f"Code for testing: {code}")
                 st.session_state.pending_email=new_email
         if 'pending_email' in st.session_state:
             st.divider()
@@ -260,7 +252,7 @@ else:
         if df is not None and not df.empty:
             st.subheader("Original Data Preview")
             st.dataframe(df.head(30))
-            st.write(f"Rows: {len(df)} | Columns: {list(df.columns)}")
+            st.write(f"Rows: {len(df)}")
             if st.button("🧹 Clean Data Now - Excel Formulas"):
                 cleaned, removed, original = clean_dataframe(df)
                 st.success(f"Cleaned! Original: {original} → Cleaned: {len(cleaned)} | Removed duplicates/invalid: {removed}")
