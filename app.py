@@ -158,7 +158,7 @@ End report {word_count} words professional free.
         final = " ".join(words[:word_count])
     return final
 
-# === FIXED TOP BAR - CLICKABLE ===
+# === CLICKABLE TOP BAR ===
 st.markdown("""
 <style>
 .qinetiq-bar {background:#0a1931;padding:12px 25px;display:flex;justify-content:space-between;align-items:center;color:white;position:sticky;top:0;z-index:999;border-radius:10px;margin-bottom:20px}
@@ -269,6 +269,41 @@ if st.session_state.auth.get("logged_in"):
             st.download_button("⬇️ Download Report TXT - FREE", st.session_state.report_text.encode(), f"Report_{dept}_{st.session_state.report_wc}words.txt", key="dl_report", type="primary")
             st.write("⭐ Rate CleanData LAI"); rating=st.feedback("stars", key="rate")
             if rating is not None: st.success(f"Thanks for {rating+1} stars! ⭐")
+
+    # === FIX - SHOW INFO WHEN LOGGED IN SO TOP BAR WORKS ===
+    st.divider()
+    st.markdown('<div id="who-we-are"></div>', unsafe_allow_html=True)
+    with st.expander("🏢 Who We Are - Click to open", expanded=False):
+        st.markdown("""
+        **CleanData LAI** is proudly South African, founded in **2026** by **Luyanda**, based at **867 Nkosisikelela Street, Inanda, Durban KZN**.
+        We fix messy Excel in seconds. From eMatikwe to Inanda, we help spaza shops, liquor stores like Senamile Liquor, remote workers.
+        **Mission:** Make clean data for every business, not just Sandton corporates. POPIA compliant.
+        **Location:** 867 Nkosisikelela Street, Inanda, Durban 4310. **Founder:** Luyanda Lungelo Mchunu.
+        """)
+    st.markdown('<div id="what-we-do"></div>', unsafe_allow_html=True)
+    with st.expander("⚙️ What We Do - Click to open", expanded=False):
+        st.markdown("""
+        **1. Instant Data Cleaning (30 Formulas):** TRIM, CLEAN, PROPER, UNIQUE, VLOOKUP, XLOOKUP, SUMIF, SUMIFS...
+        Fix names Luyanda Dlamini, emails thandi@gmail.com, phones 0787674535, amounts R 100.00, Department Sales (not SALES).
+        **2. Stock, Sales, Payroll:** Ready for Pastel/Sage, SARS VAT, HR.
+        **3. Reports FREE:** 100-500 words professional. **Different:** Cleaning in seconds + reports. No CAPS.
+        For individuals, remote workers, spaza shops, liquor stores, salons.
+        """)
+    st.markdown('<div id="pricing"></div>', unsafe_allow_html=True)
+    with st.expander("💰 Pricing - Click to open", expanded=False):
+        st.markdown("**Free Trial 1 Day FREE. After: 1 Day R100, 1 Week R570, 1 Month R2250. Reports FREE now, later R50-R250. PayFast secure.**")
+    st.markdown('<div id="contact"></div>', unsafe_allow_html=True)
+    with st.expander("📞 Contact - Click to open", expanded=False):
+        st.markdown("""
+        **Phone/WhatsApp:** 078 767 4535
+        **Email:** luyandalungelo747@gmail.com
+        **Address:** 867 Nkosisikelela Street, Inanda, Durban KZN
+        **Hours:** Mon-Sat 08:00-18:00 SAST
+        [Chat WhatsApp](https://wa.me/27787674535)
+        """)
+        if st.button("📱 WhatsApp Now - Logged In", key="wa_in"):
+            st.markdown("[Open WhatsApp](https://wa.me/27787674535)")
+
     st.stop()
 
 # PUBLIC PAGES
@@ -298,7 +333,6 @@ We are registered, POPIA compliant, and focused on local business needs. From eM
 **Founded:** 2026
 **Founder:** Luyanda Lungelo Mchunu
 """)
-    st.markdown('<div id="what-we-do"></div>', unsafe_allow_html=True)
 
 with tab2:
     st.markdown("""
@@ -327,7 +361,6 @@ Individuals, remote workers, spaza shops, liquor stores like Senamile Liquor, sa
 - **Built for SA:** Understands SA phone numbers, Rands, local businesses.
 - **Affordable:** Starts with 1-day free trial, then R100/day.
 """)
-    st.markdown('<div id="pricing"></div>', unsafe_allow_html=True)
 
 with tab3:
     st.markdown("""
@@ -342,7 +375,6 @@ with tab3:
 Pay via PayFast - secure, instant activation.
 """)
     st.info("Sign up to see PayFast buttons - they are visible after login in sidebar.")
-    st.markdown('<div id="contact"></div>', unsafe_allow_html=True)
 
 with tab4:
     st.markdown("""
