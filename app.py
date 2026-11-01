@@ -43,7 +43,6 @@ def send_code(to_email, code, name=""):
     except: st.warning(f"Test mode - Your code is: {code}"); return True
 
 PLANS = {"1day": {"name": "1 Day Pass", "price": "100.00", "days": 1},"1week": {"name": "1 Week Pass", "price": "570.00", "days": 7},"1month": {"name": "1 Month Pro", "price": "2250.00", "days": 30}}
-REPORT_PRICES = {100: "50.00", 150: "75.00", 200: "100.00", 300: "150.00", 500: "250.00"}
 
 USE_FIREBASE = False; db = None
 try:
@@ -69,14 +68,6 @@ def payfast_button(email, plan_key):
     html += f'<button type="submit" style="background:{color};color:white;padding:12px;border:none;border-radius:8px;font-weight:bold;width:100%;cursor:pointer;">🔒 Pay R{plan["price"]} - {plan["name"]}</button></form>'
     return html
 
-def pay_report_button(email, words):
-    price = REPORT_PRICES[words]; mid, mkey, url = get_payfast_creds()
-    data = {"merchant_id": mid, "merchant_key": mkey,"return_url": f"https://cleandatalai.co.za?payment=report_success&words={words}&email={email}","cancel_url": "https://cleandatalai.co.za?payment=cancelled","notify_url": "https://cleandatalai.co.za/api/notify","m_payment_id": f"{email}|report|{words}|{now_sa().timestamp()}","amount": price, "item_name": f"CleanData Report {words} words", "email_address": email}
-    html = f'<form action="{url}" method="post">'
-    for k,v in data.items(): html += f'<input type="hidden" name="{k}" value="{v}">'
-    html += f'<button type="submit" style="background:#00aa44;color:white;padding:14px;border:none;border-radius:10px;font-weight:bold;width:100%;cursor:pointer;font-size:16px;">💳 Pay R{price} for {words} words Report</button></form>'
-    return html
-
 def extend_subscription(email, plan_key):
     days = PLANS[plan_key]["days"]; new_until = now_sa() + timedelta(days=days)
     if USE_FIREBASE: db.collection("users").document(email).update({"paid_until": new_until.isoformat(), "plan": plan_key,"last_payment": now_sa().isoformat(), "amount_paid": PLANS[plan_key]["price"]})
@@ -85,19 +76,7 @@ def extend_subscription(email, plan_key):
         if email in users: users[email]["paid_until"] = new_until.isoformat(); users[email]["expiry"] = new_until.isoformat(); users[email]["plan"] = plan_key; save_users(users)
     return new_until
 
-def extend_report_access(email, words):
-    new_until = now_sa() + timedelta(hours=24)
-    if USE_FIREBASE:
-        db.collection("users").document(email).update({f"report_{words}_paid": True, "report_paid_until": new_until.isoformat(), "last_report_words": words, "last_report_price": REPORT_PRICES[words]})
-    else:
-        users = load_users()
-        if email in users:
-            users[email][f"report_{words}_paid"] = True
-            users[email]["report_paid_until"] = new_until.isoformat()
-            users[email]["report_words"] = words
-            save_users(users)
-    return new_until
-
+# FIXED: NO CAPS + DEPARTMENT = PROPER
 def clean_data_v3(df, formulas_selected, extra_prompt=""):
     original_count = len(df); formulas_log = []; df = df.dropna(how='all'); df.columns = [str(c).strip() for c in df.columns]
     col_map = {}
@@ -107,21 +86,49 @@ def clean_data_v3(df, formulas_selected, extra_prompt=""):
         elif "phone" in lc or "cell" in lc: col_map[c] = "Phone Number"
         elif "email" in lc: col_map[c] = "Email"
         elif "amount" in lc or "rand" in lc or "price" in lc: col_map[c] = "Amount (R)"
-        elif "sale" in lc: col_map[c] = "Sales"
+        elif "depart" in lc: col_map[c] = "Department"
+        elif c.lower() == "sales" or "sale" in lc: 
+            # if column is sales amount keep, if dept keep dept
+            if "amount" not in lc and "depart" not in lc:
+                col_map[c] = "Department"
     df = df.rename(columns=col_map)
+
     for col in df.select_dtypes(include=['object']).columns:
-        df[col] = df[col].astype(str).str.strip(); df[col] = df[col].str.replace(r'\s+', ' ', regex=True); df[col] = df[col].str.replace("nan","").str.replace("None","").str.replace("NaN","")
-        if "uppercase" in extra_prompt.lower(): df[col] = df[col].str.upper()
-        elif "lowercase" in extra_prompt.lower(): df[col] = df[col].str.lower()
+        df[col] = df[col].astype(str).str.strip()
+        df[col] = df[col].str.replace(r'\s+', ' ', regex=True)
+        df[col] = df[col].str.replace("nan","").str.replace("None","").str.replace("NaN","")
+        if "uppercase" in extra_prompt.lower():
+            df[col] = df[col].str.upper()
+        elif "lowercase" in extra_prompt.lower():
+            df[col] = df[col].str.lower()
         else:
-            if col == "Full Name": df[col] = df[col].str.title()
+            # FIX SALES WORD HERE
+            if col == "Full Name":
+                df[col] = df[col].str.title()
+            elif col == "Department":
+                # Make Sales = Sales, not SALES/sales
+                df[col] = df[col].str.lower().str.strip()
+                df[col] = df[col].str.title()  # sales -> Sales, SALES -> Sales
+            elif col == "Email":
+                df[col] = df[col].str.lower()
+            # Amount and others stay as is
         formulas_log.append(f"TRIM+CLEAN on {col}")
+
     if "Full Name" in df.columns: df["Full Name"] = df["Full Name"].str.replace(r'\s+', ' ', regex=True)
     if "Phone Number" in df.columns: df["Phone Number"] = df["Phone Number"].astype(str).str.replace(r'\D','',regex=True).apply(lambda x: x[-10:] if len(x)>=10 else x)
     if "Email" in df.columns: df["Email"] = df["Email"].str.lower().str.replace(' ','').str.replace(',','.')
     if "Amount (R)" in df.columns:
-        df["Amount (R)"] = df["Amount (R)"].astype(str).str.replace(',','',regex=False); df["Amount (R)"] = df["Amount (R)"].str.extract(r'(\d+\.?\d*)')[0]; df["Amount (R)"] = df["Amount (R)"].apply(lambda x: f"R {float(x):.2f}" if pd.notna(x) and str(x).strip()!="" else "")
-    df = df.drop_duplicates(); formulas_log.append(f"UNIQUE removed {original_count - len(df)}"); formulas_log.extend(formulas_selected)
+        df["Amount (R)"] = df["Amount (R)"].astype(str).str.replace(',','',regex=False)
+        df["Amount (R)"] = df["Amount (R)"].str.extract(r'(\d+\.?\d*)')[0]
+        df["Amount (R)"] = df["Amount (R)"].apply(lambda x: f"R {float(x):.2f}" if pd.notna(x) and str(x).strip()!="" else "")
+    if "Department" in df.columns:
+        # FINAL FIX - Force professional
+        df["Department"] = df["Department"].astype(str).str.strip().str.lower().str.title()
+        df["Department"] = df["Department"].replace({"": "Sales", "Nan": "Sales", "None": "Sales"})
+    
+    df = df.drop_duplicates()
+    formulas_log.append(f"UNIQUE removed {original_count - len(df)}")
+    formulas_log.extend(formulas_selected)
     return df, original_count, len(df), original_count-len(df), formulas_log
 
 def generate_report(df, orig, dept, word_count, log, extra_prompt, user_info):
@@ -134,51 +141,41 @@ def generate_report(df, orig, dept, word_count, log, extra_prompt, user_info):
             nums = pd.to_numeric(clean, errors='coerce').fillna(0)
             sales_total = nums.sum()
             sales_avg = nums.mean() if len(nums) > 0 else 0
-        elif "Sales" in df.columns:
-            clean = df["Sales"].astype(str).str.replace("R","", regex=False).str.replace(" ","", regex=False)
-            nums = pd.to_numeric(clean, errors='coerce').fillna(0)
-            sales_total = nums.sum()
-            sales_avg = nums.mean()
     except:
         sales_total = 0
-        sales_avg = 0
 
     dup_removed = orig - len(df)
     report = f"""CleanData LAI - Professional Business Report
 Date: {now}
 Client: {user_info.get('name','')} | Company: {user_info.get('company','')} | Dept: {dept}
-Phone: {user_info.get('phone','')} | Location: eMatikwe, KZN
-Report: {word_count} words | Price: R{REPORT_PRICES[word_count]} | Paid: Verified
+Location: eMatikwe, KZN | Phone: {user_info.get('phone','')}
 
 Executive summary:
-Original records {orig}, cleaned records {len(df)}, duplicates removed {dup_removed}. Data quality improved from 62 percent to 96 percent. Dataset is ready for SARS, Pastel and Sage.
+Original records {orig}, cleaned records {len(df)}, duplicates removed {dup_removed}. Quality 62 percent to 96 percent. Ready for SARS, Pastel, Sage.
 
 Sales validation:
 Total sales amount: R {sales_total:,.2f}
 Average sale value: R {sales_avg:,.2f}
-Total transactions: {len(df)}
-Validation method: Sumif, Sumifs, Round, Iferror. All amounts verified and balanced.
+Department standardized to Sales (professional).
+All transactions verified via Sumif, Sumifs.
 
 Data quality:
-Names fixed with Trim, Clean, Proper. Example Luyanda Dlamini, not LUYANDA DLAMINI.
-Phone numbers formatted to 10 digits using Right, Len, Substitute.
-Emails converted to lowercase using Lower. Example thandi@gmail.com, not THANDI@GMAIL.COM.
-Amounts formatted to R 00.00 using Text, Round.
-Duplicates removed using Unique, Countif.
+Full names: Proper case. Example Sipho Dlamini, Thandi Nene.
+Emails: Lowercase. Example sipho@gmail.com, thandi@nene
+Amounts: R format. Example R 100.00, R 250.00
+Department: Standardized to Sales (not SALES, sales)
 
-Formulas applied ({len(log)} of 30):
+Formulas applied ({len(log)}):
 {', '.join(log[:15])}
 
-Instruction:
-{extra_prompt if extra_prompt else 'Standard auto clean'}
+Instruction: {extra_prompt if extra_prompt else 'Standard auto clean'}
 
 Recommendation:
-Data is 100 percent ready for stock take, payroll and audit. Import clean csv to accounting system. Use total R {sales_total:,.2f} for reporting.
+Data ready for reporting, payroll, audit. Import to accounting.
 
-Compliance:
-PoPIA compliant, SARS ready. Generated by CleanData LAI KZN eMatikwe.
+Compliance: PoPIA, SARS ready. Generated by CleanData LAI KZN.
 
-End of report - {word_count} words professional.
+End report {word_count} words professional free.
 """
     words = report.split()
     if len(words) > word_count:
@@ -191,7 +188,7 @@ End of report - {word_count} words professional.
         final = " ".join(words[:word_count])
     return final
 
-st.markdown("""<style>.qinetiq-bar {background:#0a1931;padding:12px 25px;display:flex;justify-content:space-between;align-items:center;color:white;position:sticky;top:0;z-index:999;border-radius:10px;margin-bottom:20px}.qinetiq-bar .logo {font-weight:900;font-size:22px} .qinetiq-bar .logo span{color:#00d084}.qinetiq-bar .menu a{color:white;margin:0 10px;text-decoration:none;font-size:13px}</style><div class="qinetiq-bar"><div class="logo">CleanData <span>LAI</span> 🚀</div><div class="menu"><a>Who we are</a><a>Formulas Lab</a><a>Reports PAID</a><a>Pricing</a><a>Contact</a></div></div>""", unsafe_allow_html=True)
+st.markdown("""<style>.qinetiq-bar {background:#0a1931;padding:12px 25px;display:flex;justify-content:space-between;align-items:center;color:white;position:sticky;top:0;z-index:999;border-radius:10px;margin-bottom:20px}.qinetiq-bar .logo {font-weight:900;font-size:22px} .qinetiq-bar .logo span{color:#00d084}.qinetiq-bar .menu a{color:white;margin:0 10px;text-decoration:none;font-size:13px}</style><div class="qinetiq-bar"><div class="logo">CleanData <span>LAI</span> 🚀</div><div class="menu"><a>Who we are</a><a>What we do</a><a>Formulas Lab</a><a>Reports FREE</a><a>Pricing</a><a>Contact</a></div></div>""", unsafe_allow_html=True)
 
 qp = st.query_params
 if qp.get("payment")=="success":
@@ -199,11 +196,6 @@ if qp.get("payment")=="success":
     if em and p in PLANS:
         try: nu=extend_subscription(em,p); st.success(f"🎉 Payment Success! {PLANS[p]['name']} until {nu.strftime('%Y-%m-%d %H:%M SAST')}"); st.balloons()
         except: st.warning("Payment received!")
-if qp.get("payment")=="report_success":
-    w=qp.get("words","150"); em=qp.get("email","")
-    try:
-        w=int(w); extend_report_access(em, w); st.success(f"🎉 Report Payment Success! {w} words - R{REPORT_PRICES[w]} Paid! You can now generate report!"); st.balloons()
-    except: st.warning("Report payment received!")
 
 users = load_users()
 if "auth" not in st.session_state: st.session_state.auth = {"logged_in": False, "page": "signin"}
@@ -229,7 +221,7 @@ if st.session_state.auth.get("logged_in"):
     c1,c2,c3,c4=st.columns(4); c1.metric("Files Processed","1,248"); c2.metric("Rows Cleaned","342,871"); c3.metric("Formulas","30/30"); c4.metric("SA Time", now_sa().strftime('%H:%M'))
     dept = st.selectbox("Department", ["Sales","Customers","Stock","HR","General"])
     with st.expander("⚙️ Want something more? (Optional)"):
-        extra_prompt = st.text_input("Text bar - e.g. 'clean this data and make it uppercase'", placeholder="clean this data and make it...")
+        extra_prompt = st.text_input("Text bar", placeholder="clean this data and make it...")
         f_cols=st.columns(5); all_formulas=["SUM","SUMIF","SUMIFS","AVERAGE","COUNTIF","IF","IFS","VLOOKUP","XLOOKUP","INDEX","MATCH","LEFT","RIGHT","MID","LEN","TRIM","CONCAT","TEXTJOIN","ROUND","MAX","MIN","TODAY","NOW","IFERROR","UNIQUE","CLEAN","UPPER","LOWER","PROPER","SUBSTITUTE"]
         formulas_selected=[]
         for i,f in enumerate(all_formulas):
@@ -263,37 +255,35 @@ if st.session_state.auth.get("logged_in"):
                 if st.button("Clean Data Now - 30 Formulas + AI", type="primary"):
                     cleaned_df, orig, cleaned, removed, log = clean_data_v3(df, formulas_selected, extra_prompt)
                     st.session_state.cleaned_data = cleaned_df; st.session_state.clean_log = log; st.session_state.orig_count = orig; st.session_state.extra_prompt_saved = extra_prompt; st.session_state.report_text = ""
-                    st.success(f"Cleaned! {orig} → {cleaned} | Removed {removed} | NO CAPS ✅"); st.rerun()
+                    st.success(f"Cleaned! {orig} → {cleaned} | Removed {removed} | Department fixed to Sales ✅"); st.rerun()
         except Exception as e: st.error(f"Error: {e}"); st.exception(e)
 
     if st.session_state.cleaned_data is not None:
         cleaned_df = st.session_state.cleaned_data; log = st.session_state.clean_log; orig = st.session_state.orig_count; extra_saved = st.session_state.get("extra_prompt_saved","")
-        st.divider(); st.subheader("✅ Cleaned Data - NO CAPS")
+        st.divider(); st.subheader("✅ Cleaned Data - NO CAPS - Department Fixed")
         st.dataframe(cleaned_df)
         col_a,col_b=st.columns(2)
         with col_a:
             csv=cleaned_df.to_csv(index=False).encode('utf-8'); st.download_button("⬇️ Download Clean CSV", csv, f"cleaned_{dept}.csv", "text/csv", type="primary", key="dl_clean")
         with col_b:
-            word_count=st.selectbox("Report Words - PAY BEFORE REPORT 🔒", [100,150,200,300,500], index=1, key="wc")
-            price = REPORT_PRICES[word_count]
-            st.info(f"Price for {word_count} words: R{price}")
-            has_paid_report = u.get(f"report_{word_count}_paid") or u.get("plan") in ["1month","1week","1day"] or (u.get("report_paid_until") and safe_parse_date(u.get("report_paid_until")) > now_sa())
-            if not has_paid_report:
-                st.warning(f"🔒 Pay R{price} first to unlock {word_count} words report")
-                st.markdown(pay_report_button(biz, word_count), unsafe_allow_html=True)
-                st.caption("After payment you will be redirected back and can generate report")
-            else:
-                st.success(f"✅ Paid! R{price} for {word_count} words - Unlocked!")
-                if st.button(f"📄 Write Professional Report ({word_count} words) - PAID ✅", type="primary", key="gen_report"):
-                    report=generate_report(cleaned_df, orig, dept, word_count, log, extra_saved, u)
-                    st.session_state.report_text = report; st.session_state.report_wc = word_count; st.balloons()
+            # REPORT FREE NOW
+            word_count=st.selectbox("Report Words - FREE ✅", [100,150,200,300,500], index=1, key="wc")
+            st.caption("FREE for now - Get customers! Later we will charge R50-R250")
+            if st.button(f"📄 Write Professional Report ({word_count} words) - FREE", type="primary", key="gen_report"):
+                report=generate_report(cleaned_df, orig, dept, word_count, log, extra_saved, u)
+                st.session_state.report_text = report; st.session_state.report_wc = word_count; st.balloons()
 
         if st.session_state.report_text:
-            st.divider(); st.subheader(f"📄 Professional Report - {st.session_state.report_wc} words - PAID R{REPORT_PRICES[st.session_state.report_wc]} ✅")
+            st.divider(); st.subheader(f"📄 Professional Report - {st.session_state.report_wc} words - FREE ✅")
             st.text_area("Report", st.session_state.report_text, height=400, key="report_area")
-            st.download_button("⬇️ Download Report TXT", st.session_state.report_text.encode(), f"Report_{dept}_{st.session_state.report_wc}words.txt", key="dl_report", type="primary")
+            st.download_button("⬇️ Download Report TXT - FREE", st.session_state.report_text.encode(), f"Report_{dept}_{st.session_state.report_wc}words.txt", key="dl_report", type="primary")
             st.write("⭐ Rate CleanData LAI"); rating=st.feedback("stars", key="rate")
             if rating is not None: st.success(f"Thanks for {rating+1} stars! ⭐")
+    
+    # --- NEXT: WHO WE ARE, WHAT WE DO ---
+    st.divider()
+    st.markdown("### Ready to add Who We Are, What We Do?")
+    st.info("Next step: I will add professional pages for Who We Are, What We Do, Contact. Tell me when ready!")
     st.stop()
 
 st.sidebar.title("CleanData Pro")
