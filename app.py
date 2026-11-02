@@ -2,7 +2,7 @@ from pathlib import Path
 p = Path("/mnt/data/Pasted text.txt")
 print(p.exists(), p.stat().st_size if p.exists() else None)
 print(p.read_text(encoding="utf-8", errors="replace")[:20000] if p.exists() else "File not found")
-mport streamlit as st, pandas as pd, os, json, random, smtplib, hashlib, re, fitz
+import streamlit as st, pandas as pd, os, json, random, smtplib, hashlib, re, fitz
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from PIL import Image
