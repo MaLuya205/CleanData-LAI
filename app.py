@@ -1,19 +1,14 @@
 import streamlit as st
 import pandas as pd
 import json
-import os
 import re
 import secrets
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-# ==========================================
-# CLEANDATA LAI 2.0 - LEGENDARY EDITION
-# Built in Durban, South Africa
-# ==========================================
-
+# PAGE CONFIG MUST BE FIRST
 st.set_page_config(
     page_title="CleanData LAI | Data Intelligence",
     page_icon="🚀",
@@ -22,49 +17,23 @@ st.set_page_config(
 
 SA_TIMEZONE = ZoneInfo("Africa/Johannesburg")
 DATA_FILE = Path("users.json")
+EMAIL_VERIFICATION_ENABLED = False  # Set True when you connect email OTP
 
-# ==========================================
 # BRANDING
-# ==========================================
-
 st.markdown("""
 <style>
-.stApp {
-    background: #f4f7fb;
-}
+.stApp { background: #f4f7fb; }
 .main-header {
     background: linear-gradient(120deg,#09172d,#12395a);
-    padding: 30px;
-    border-radius: 18px;
-    color: white;
-    margin-bottom: 25px;
+    padding: 28px; border-radius: 18px; color: white; margin-bottom: 22px;
 }
-.main-header h1 {
-    color: white;
-    font-size: 36px;
-}
-.main-header span {
-    color: #00d99a;
-}
-.metric-card {
-    background: white;
-    padding: 20px;
-    border-radius: 14px;
-    border: 1px solid #e5eaf0;
-}
+.main-header h1 { color: white; font-size: 34px; margin:0; }
+.main-header span { color: #00d99a; }
 </style>
 """, unsafe_allow_html=True)
 
-# ==========================================
-# TIME
-# ==========================================
-
 def now_sa():
     return datetime.now(SA_TIMEZONE)
-
-# ==========================================
-# CUSTOMER PRICING
-# ==========================================
 
 PLANS = {
     "remote_daily": {"name": "Remote Worker Daily", "price": 49, "days": 1, "records": 1000},
@@ -77,27 +46,29 @@ PLANS = {
     "enterprise": {"name": "Enterprise", "price": 9999, "days": 30, "records": 500000}
 }
 
-# ==========================================
-# DATABASE
-# ==========================================
-
 def load_users():
     if not DATA_FILE.exists():
+        DATA_FILE.write_text("{}")
         return {}
     try:
-        return json.loads(DATA_FILE.read_text())
-    except (json.JSONDecodeError, OSError):
-        st.error("Unable to read account storage.")
+        text = DATA_FILE.read_text().strip()
+        if not text:
+            return {}
+        return json.loads(text)
+    except Exception:
+        # Backup corrupted file
+        backup = DATA_FILE.with_suffix(".corrupt.json")
+        try:
+            DATA_FILE.rename(backup)
+        except:
+            pass
+        DATA_FILE.write_text("{}")
         return {}
 
 def save_users(users):
-    temporary = DATA_FILE.with_suffix(".tmp")
-    temporary.write_text(json.dumps(users, indent=2))
-    temporary.replace(DATA_FILE)
-
-# ==========================================
-# PASSWORD SECURITY
-# ==========================================
+    tmp = DATA_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(users, indent=2))
+    tmp.replace(DATA_FILE)
 
 def hash_password(password):
     try:
@@ -105,32 +76,30 @@ def hash_password(password):
         return "argon2$" + PasswordHasher().hash(password)
     except ImportError:
         salt = secrets.token_hex(16)
-        derived = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 600000).hex()
+        # FIXED: 260k is enough, 600k freezes Streamlit
+        derived = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 260000).hex()
         return f"pbkdf2${salt}${derived}"
 
 def verify_password(password, stored):
     try:
         if stored.startswith("argon2$"):
             from argon2 import PasswordHasher
-            return PasswordHasher().verify(stored[7:], password)
+            PasswordHasher().verify(stored[7:], password)
+            return True
         if stored.startswith("pbkdf2$"):
-            _, salt, expected = stored.split("$")
-            actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 600000).hex()
+            _, salt, expected = stored.split("$", 2)
+            actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 260000).hex()
             return secrets.compare_digest(actual, expected)
     except Exception:
         return False
     return False
-
-# ==========================================
-# DATA CLEANING ENGINE
-# ==========================================
 
 def clean_data(df):
     original = len(df)
     df = df.copy()
     df = df.dropna(how="all")
     df.columns = [str(c).strip() for c in df.columns]
-    for col in df.select_dtypes(include="object"):
+    for col in df.select_dtypes(include=["object"]):
         df[col] = df[col].fillna("").astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
         if "name" in col.lower():
             df[col] = df[col].str.title()
@@ -138,216 +107,208 @@ def clean_data(df):
             df[col] = df[col].str.lower().str.replace(" ", "")
     for col in df.columns:
         if "phone" in col.lower() or "cell" in col.lower():
-            df[col] = df[col].apply(lambda x: re.sub(r"\D", "", str(x)))
+            df[col] = df[col].apply(lambda x: re.sub(r"\D", "", str(x)) if str(x).strip() else "")
     df = df.drop_duplicates()
     removed = original - len(df)
-    return df, original, len(df), removed
+    return df, original, removed
 
 def create_report(df, original, removed, user):
-    return f"""
-CLEANDATA LAI
-PROFESSIONAL BUSINESS REPORT
+    return f"""CLEANDATA LAI - PROFESSIONAL REPORT
 
-Client: {user.get('name', '')}
-Company: {user.get('company', '')}
+Client: {user.get('name','')}
+Company: {user.get('company','')}
 Date: {now_sa().strftime('%d %B %Y %H:%M SAST')}
-DATA PROCESSING SUMMARY
-Original records: {original}
-Clean records: {len(df)}
-Records removed: {removed}
-Column count: {len(df.columns)}
-Generated by CleanData LAI - Inanda, Durban, SA
+Original: {original} | Clean: {len(df)} | Removed: {removed}
+Columns: {len(df.columns)}
+Generated by CleanData LAI, Inanda, Durban
 """
 
-# ==========================================
-# SESSION
-# ==========================================
-
+# SESSION INIT
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "email" not in st.session_state:
     st.session_state.email = None
+if "cleaned_df" not in st.session_state:
+    st.session_state.cleaned_df = None
 
 users = load_users()
 
-# ==========================================
-# HEADER
-# ==========================================
+# AUTO-FIX OLD ACCOUNTS - so you can login immediately
+if not EMAIL_VERIFICATION_ENABLED:
+    needs_save = False
+    for acc in users.values():
+        if not acc.get("verified"):
+            acc["verified"] = True
+            needs_save = True
+    if needs_save:
+        save_users(users)
 
+# HEADER
 st.markdown("""
 <div class="main-header">
 <h1>CleanData <span>LAI</span> 🚀</h1>
-<p>INTELLIGENT DATA SOLUTIONS</p>
-<h3>Clean Data. Better Decisions.</h3>
-<p>Built in Durban. Designed for businesses everywhere.</p>
+<p>INTELLIGENT DATA SOLUTIONS - Clean Data. Better Decisions.</p>
 </div>
 """, unsafe_allow_html=True)
 
-page = st.sidebar.radio("Navigation", ["Home", "Pricing", "About Us", "Contact", "Sign In", "Sign Up"])
-st.sidebar.markdown("---")
-st.sidebar.caption("CleanData LAI 2.0 | South Africa")
+# NAVIGATION - FIXED: Don't show Sign In/Up when logged in
+if st.session_state.logged_in:
+    page = st.sidebar.radio("Navigation", ["Dashboard", "Home", "Pricing", "About Us", "Contact"], key="nav_logged")
+else:
+    page = st.sidebar.radio("Navigation", ["Home", "Pricing", "About Us", "Contact", "Sign In", "Sign Up"], key="nav_public")
 
-# ==========================================
-# HOME / PRICING / ABOUT / CONTACT (same)
-# ==========================================
+st.sidebar.caption("CleanData LAI 2.1 | Durban, SA")
 
+# LOGGED IN USER BAR
+if st.session_state.logged_in:
+    u = users.get(st.session_state.email)
+    if u:
+        st.sidebar.success(f"Signed in: {u['name']}")
+        if st.sidebar.button("Logout", key="logout_btn"):
+            st.session_state.logged_in = False
+            st.session_state.email = None
+            st.session_state.cleaned_df = None
+            st.rerun()
+    else:
+        st.session_state.logged_in = False
+        st.session_state.email = None
+        st.rerun()
+
+# PAGES
 if page == "Home":
     st.title("Welcome to CleanData LAI")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Data Cleaning", "Available")
-    c2.metric("Professional Reports", "Available")
+    c1,c2,c3 = st.columns(3)
+    c1.metric("Data Cleaning", "Active")
+    c2.metric("Reports", "Active")
     c3.metric("Currency", "ZAR")
-    st.subheader("Your data deserves better.")
-    st.write("CleanData LAI helps remote workers, freelancers, small businesses and companies organise messy data.")
+    st.write("Upload messy Excel/CSV, remove duplicates, standardize, download clean file.")
 
 elif page == "Pricing":
-    st.title("Our Subscription Plans")
-    groups = {"Remote Workers & Freelancers": ["remote_daily", "remote_weekly", "remote_monthly"], "Small Businesses": ["business_starter", "business_pro", "business_premium"], "Corporate Companies": ["corporate", "enterprise"]}
-    for group, keys in groups.items():
+    st.title("Subscription Plans - ZAR")
+    for group, keys in {"Remote & Freelancers": ["remote_daily","remote_weekly","remote_monthly"], "Business": ["business_starter","business_pro","business_premium"], "Corporate": ["corporate","enterprise"]}.items():
         st.subheader(group)
         cols = st.columns(len(keys))
-        for col, key in zip(cols, keys):
-            plan = PLANS[key]
+        for col,key in zip(cols,keys):
+            p=PLANS[key]
             with col:
-                st.markdown("### " + plan["name"])
-                st.markdown(f"## R{plan['price']:,}")
-                st.write(f"{plan['records']:,} records per period")
-                st.write(f"{plan['days']} days")
+                st.markdown(f"**{p['name']}**")
+                st.markdown(f"## R{p['price']:,}")
+                st.caption(f"{p['records']:,} records / {p['days']} days")
         st.divider()
 
 elif page == "About Us":
     st.title("Who We Are")
-    st.write("**CleanData LAI** is a South African data solutions business founded by Luyanda Lungelo Mchunu. Based in Inanda, Durban, KZN.")
+    st.write("Founded by Luyanda Lungelo Mchunu, Inanda, Durban. Mission: Make data cleaning accessible to SA businesses.")
 
 elif page == "Contact":
-    st.title("Contact CleanData LAI")
-    st.write("Founder: Luyanda Lungelo Mchunu | Inanda, Durban, KZN | 078 767 4535")
-    st.link_button("Chat on WhatsApp", "https://wa.me/27787674535")
+    st.title("Contact")
+    st.write("Luyanda Mchunu | 078 767 4535 | luyandalungelo747@gmail.com")
+    st.link_button("WhatsApp Us", "https://wa.me/27787674535")
 
-# ==========================================
-# SIGN UP - FIXED
-# ==========================================
-
-elif page == "Sign Up":
-    st.title("Create Your Account")
-    name = st.text_input("Full Name")
-    company = st.text_input("Company Name")
-    customer_type = st.selectbox("Customer Type", ["Remote Worker", "Freelancer", "Small Business", "Corporate Company"])
-    phone = st.text_input("Phone Number")
-    email = st.text_input("Email Address")
-    password = st.text_input("Password", type="password")
-    confirm = st.text_input("Confirm Password", type="password")
-
-    if st.button("Create Account", type="primary"):
-        if not all([name, company, phone, email, password, confirm]):
-            st.error("Please complete all fields.")
+elif page == "Sign Up" and not st.session_state.logged_in:
+    st.title("Create Account")
+    name = st.text_input("Full Name", key="su_name")
+    company = st.text_input("Company", key="su_comp")
+    ctype = st.selectbox("Customer Type", ["Remote Worker","Freelancer","Small Business","Corporate"], key="su_type")
+    phone = st.text_input("Phone", key="su_phone")
+    email = st.text_input("Email", key="su_email")
+    pwd = st.text_input("Password (min 12 chars)", type="password", key="su_pwd")
+    conf = st.text_input("Confirm Password", type="password", key="su_conf")
+    if st.button("Create Account", type="primary", key="su_btn"):
+        if not all([name,company,phone,email,pwd,conf]):
+            st.error("Fill all fields.")
         elif not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
-            st.error("Enter a valid email address.")
-        elif len(password) < 12:
-            st.error("Password must contain at least 12 characters.")
-        elif password != confirm:
-            st.error("Passwords do not match.")
+            st.error("Invalid email.")
+        elif len(pwd) < 12:
+            st.error("Password must be 12+ characters.")
+        elif pwd != conf:
+            st.error("Passwords don't match.")
         elif email.lower() in users:
-            st.error("Account already exists.")
+            st.error("Account exists. Go to Sign In.")
         else:
             users[email.lower()] = {
-                "name": name.strip(),
-                "company": company.strip(),
-                "customer_type": customer_type,
-                "phone": phone.strip(),
-                "email": email.lower(),
-                "password": hash_password(password),
+                "name": name.strip(), "company": company.strip(),
+                "customer_type": ctype, "phone": re.sub(r"\D","",phone),
+                "email": email.lower(), "password": hash_password(pwd),
                 "created": now_sa().isoformat(),
-                "verified": True,  # FIXED: Auto-verified for testing
-                "plan": "unverified",
-                "paid_until": None
+                "verified": True if not EMAIL_VERIFICATION_ENABLED else False,
+                "plan": "free_trial", "paid_until": None
             }
             save_users(users)
-            st.success("Account created successfully! You can now Sign In.")
+            st.success("Account created! Go to Sign In now.")
             st.balloons()
 
-# ==========================================
-# SIGN IN - FIXED
-# ==========================================
-
-elif page == "Sign In":
+elif page == "Sign In" and not st.session_state.logged_in:
     st.title("Customer Login")
-    email = st.text_input("Email Address")
-    password = st.text_input("Password", type="password")
-
-    # TEMP ADMIN TOOL TO FIX OLD ACCOUNTS
-    with st.expander("🔧 Admin Fix - Click if old account can't login"):
-        if st.button("Verify All Existing Accounts Now"):
-            fixed = 0
-            for k in users:
-                if not users[k].get("verified"):
-                    users[k]["verified"] = True
-                    fixed += 1
-            save_users(users)
-            st.success(f"Fixed {fixed} accounts! Now try login again.")
-
-    if st.button("Sign In", type="primary"):
-        account = users.get(email.lower())
-        if not account:
+    email = st.text_input("Email", key="si_email")
+    pwd = st.text_input("Password", type="password", key="si_pwd")
+    if st.button("Sign In", type="primary", key="si_btn"):
+        acc = users.get(email.lower().strip())
+        if not acc:
             st.error("Account not found.")
-        elif not verify_password(password, account.get("password", "")):
-            st.error("Incorrect login details.")
+        elif not verify_password(pwd, acc.get("password","")):
+            st.error("Wrong password.")
+        elif EMAIL_VERIFICATION_ENABLED and not acc.get("verified"):
+            st.error("Please verify email first. Check inbox.")
         else:
-            # FIXED: Allow login even if not verified, just warn
-            if not account.get("verified"):
-                st.warning("Email not verified, but allowing login in test mode.")
             st.session_state.logged_in = True
-            st.session_state.email = email.lower()
+            st.session_state.email = email.lower().strip()
+            st.session_state.cleaned_df = None
+            st.success("Welcome!")
             st.rerun()
 
-# ==========================================
-# DASHBOARD
-# ==========================================
-
-if st.session_state.logged_in:
+# DASHBOARD - ONLY WHEN LOGGED IN AND ON DASHBOARD PAGE
+if st.session_state.logged_in and page == "Dashboard":
     email = st.session_state.email
     user = users.get(email)
     if not user:
-        st.session_state.logged_in = False
-        st.session_state.email = None
-        st.rerun()
+        st.error("Session expired.")
+        st.stop()
+    
+    st.title(f"Welcome, {user['name']} 👋")
+    st.info("Upload CSV/Excel to clean. Test mode: Email verification OFF.")
 
-    st.sidebar.success("Signed in")
-    st.sidebar.write(user["name"])
-    st.sidebar.write(user["company"])
-    if st.sidebar.button("Logout"):
-        st.session_state.logged_in = False
-        st.session_state.email = None
-        st.rerun()
-
-    st.title("Business Intelligence Dashboard")
-    st.subheader(f"Welcome, {user['name']}")
-    st.info("Test Mode: Email verification bypassed. Connect email service later for production.")
-
-    uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
-    if uploaded:
+    uploaded = st.file_uploader("Upload CSV or Excel", type=["csv","xlsx"], key="dash_uploader")
+    
+    if uploaded is not None:
+        # Clear old data when new file uploaded
+        if "last_file" not in st.session_state or st.session_state.last_file != uploaded.name:
+            st.session_state.cleaned_df = None
+            st.session_state.last_file = uploaded.name
+        
         try:
             if uploaded.name.lower().endswith(".csv"):
                 df = pd.read_csv(uploaded, dtype=str)
             else:
                 df = pd.read_excel(uploaded, dtype=str)
+            
             st.subheader("Original Preview")
             st.dataframe(df.head(20), use_container_width=True)
-            if st.button("Clean My Data", type="primary"):
-                cleaned, original, total, removed = clean_data(df)
-                st.session_state.cleaned_df = cleaned
-                st.session_state.report = create_report(cleaned, original, removed, user)
-                st.success("Data cleaning completed!")
-            if "cleaned_df" in st.session_state:
-                cleaned = st.session_state.cleaned_df
-                st.subheader("Cleaned Data")
-                st.dataframe(cleaned, use_container_width=True)
-                st.download_button("Download Clean CSV", cleaned.to_csv(index=False).encode("utf-8"), "CleanData_LAI.csv", "text/csv")
-                st.text_area("Report", st.session_state.report, height=300)
-                st.download_button("Download Report", st.session_state.report, "CleanData_Report.txt")
-        except Exception as error:
-            st.error("Unable to process this file.")
-            st.caption(str(error))
+            st.caption(f"{len(df)} rows, {len(df.columns)} columns")
+
+            if st.button("Clean My Data 🚀", type="primary", key="clean_btn"):
+                with st.spinner("Cleaning..."):
+                    cleaned, original, removed = clean_data(df)
+                    st.session_state.cleaned_df = cleaned
+                    st.session_state.report = create_report(cleaned, original, removed, user)
+                st.success(f"Done! Removed {removed} duplicates/empty rows.")
+
+        except Exception as e:
+            st.error(f"Cannot read file: {e}")
+
+    if st.session_state.cleaned_df is not None:
+        cleaned = st.session_state.cleaned_df
+        st.divider()
+        st.subheader("✅ Cleaned Data")
+        st.dataframe(cleaned, use_container_width=True)
+        col1,col2 = st.columns(2)
+        with col1:
+            st.download_button("⬇️ Download Clean CSV", cleaned.to_csv(index=False).encode("utf-8"), "CleanData_LAI_Clean.csv", "text/csv", key="dl_csv")
+        with col2:
+            if "report" in st.session_state:
+                st.download_button("⬇️ Download Report", st.session_state.report, "CleanData_Report.txt", key="dl_report")
+        if "report" in st.session_state:
+            st.text_area("Professional Report", st.session_state.report, height=180, key="report_area")
 
 st.divider()
-st.caption("CleanData LAI | Inanda, Durban, SA")
+st.caption("CleanData LAI 2.1 Fixed | Inanda, Durban, SA | Built by Luyanda Mchunu")
