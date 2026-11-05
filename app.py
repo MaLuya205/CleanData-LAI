@@ -42,7 +42,7 @@ def send_code(to_email, code, name=""):
         return True
     except: st.warning(f"Test mode - Your code is: {code}"); return True
 
-PLANS = {"1day": {"name": "1 Day Pass", "price": "100.00", "days": 1},"1week": {"name": "1 Week Pass", "price": "570.00", "days": 7},"1month": {"name": "1 Month Pro", "price": "2250.00", "days": 30}}
+PLANS = {"1day": {"name": "1 Day Pass", "price": "49.00", "days": 1},"1week": {"name": "1 Week Pass", "price": "149.00", "days": 7},"1month": {"name": "1 Month Pro", "price": "399.00", "days": 30}}
 
 USE_FIREBASE = False; db = None
 try:
@@ -291,7 +291,7 @@ if st.session_state.auth.get("logged_in"):
         """)
     st.markdown('<div id="pricing"></div>', unsafe_allow_html=True)
     with st.expander("💰 Pricing - Click to open", expanded=False):
-        st.markdown("**Free Trial 1 Day FREE. After: 1 Day R100, 1 Week R570, 1 Month R2250. Reports FREE now, later R50-R250. PayFast secure.**")
+        st.markdown("**Free Trial 1 Day FREE. After: 1 Day R49, 1 Week R149, 1 Month R399. Reports FREE now, later R50-R250. PayFast secure.**")
     st.markdown('<div id="contact"></div>', unsafe_allow_html=True)
     with st.expander("📞 Contact - Click to open", expanded=False):
         st.markdown("""
@@ -359,7 +359,7 @@ Individuals, remote workers, spaza shops, liquor stores like Senamile Liquor, sa
 - **Professional Reports:** Not just CSV, you get a real report.
 - **No CAPS:** We fix `SIPHO` to `Sipho` - looks professional.
 - **Built for SA:** Understands SA phone numbers, Rands, local businesses.
-- **Affordable:** Starts with 1-day free trial, then R100/day.
+- **Affordable:** Starts with 1-day free trial, then R49/day.
 """)
 
 with tab3:
@@ -367,9 +367,9 @@ with tab3:
 ### Pricing - Simple & Fair
 **Free Trial:** 1 Day FREE after email verification. Clean and get free reports.
 **After Trial:**
-- **1 Day Pass - R100:** Perfect for one-time cleaning.
-- **1 Week Pass - R570:** Best for weekly stock take / sales.
-- **1 Month Pro - R2250:** Unlimited cleaning + reports. For busy shops.
+- **1 Day Pass - R49:** Perfect for one-time cleaning.
+- **1 Week Pass - R149:** Best for weekly stock take / sales.
+- **1 Month Pro - R399:** Unlimited cleaning + reports. For busy shops.
 **Reports:** Currently FREE for all users (100-500 words). Later R50-R250. Get customers now!
 **Why Pay?** We keep your data safe, POPIA compliant, no ads, fast servers, support on WhatsApp.
 Pay via PayFast - secure, instant activation.
