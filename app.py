@@ -94,34 +94,3 @@ st.markdown(
     </style>
     <div class="brandbar"><div><div class="brandname">CleanData <span>LAI</span> ✦</div><div class="brandtag">A cleaner workspace for better business decisions</div></div><div class="brandtag">SOUTH AFRICA · DATA WORKSPACE</div></div>
     """,
-    unsafe_allow_html=True,
-)
-
-# -----------------------------------------------------------------------------
-# General helpers
-# -----------------------------------------------------------------------------
-def now_sa() -> datetime:
-    try:
-        from zoneinfo import ZoneInfo
-        return datetime.now(ZoneInfo("Africa/Johannesburg")).replace(tzinfo=None)
-    except Exception:
-        return datetime.utcnow() + timedelta(hours=2)
-
-
-def safe_text(value: Any) -> str:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return ""
-    return str(value).strip()
-
-
-def get_secret(section: str, key: str, default: str = "") -> str:
-    try:
-        return str(st.secrets[section][key])
-    except Exception:
-        return os.getenv(f"{section.upper()}_{key.upper()}", default)
-
-
-def db_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=15)
-    conn.row_factory = sqlite3.Row
-    return conn
