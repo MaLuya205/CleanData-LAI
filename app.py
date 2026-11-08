@@ -1,4 +1,4 @@
-import streamlit as st, pandas as pd, os, json, random, smtplib, hashlib, re, fitz
+import streamlit as st, pandas as pd, os, json, random, smtplib, hashlib, re, fitz, io, csv
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from PIL import Image
@@ -34,46 +34,58 @@ def load_users():
 def save_users(d): json.dump(d, open(USERS_FILE,"w"), indent=2)
 def hash_pwd(pwd): return hashlib.sha256(pwd.encode()).hexdigest()
 
-# === FIXED: MESSY CSV READER - NEVER CRASHES ON R 17,284 ===
+# === FIXED: MESSY CSV READER ===
 def read_messy_csv(uploaded):
-    """CleanData FIX: Never crash on messy CSV. Fixes R 17,284 comma bug."""
-    import csv, io
     uploaded.seek(0)
     raw = uploaded.read()
-    if isinstance(raw, bytes):
-        text = raw.decode('utf-8', errors='ignore')
-    else:
-        text = str(raw)
+    text = raw.decode('utf-8', errors='ignore') if isinstance(raw, bytes) else str(raw)
     lines = [l for l in text.splitlines() if l.strip() != '']
-    if not lines:
-        return pd.DataFrame()
+    if not lines: return pd.DataFrame()
     reader = csv.reader(io.StringIO("\n".join(lines)))
     rows = list(reader)
     header = [h.strip() for h in rows[0]]
     n_cols = len(header)
-    clean_rows = []
-    skipped = 0
+    clean_rows = []; skipped = 0
     for r in rows[1:]:
-        if len(r) == 0 or all(x.strip() == '' for x in r):
-            continue
-        # FIX: Salary like "R 17,284" splits into 10 cols -> merge back to 9
+        if len(r) == 0 or all(x.strip() == '' for x in r): continue
         if len(r) == n_cols + 1:
-            try:
-                r = r[:6] + [r[6] + r[7]] + r[8:]
-            except:
-                skipped += 1
-                continue
+            try: r = r[:6] + [r[6] + r[7]] + r[8:]
+            except: skipped += 1; continue
         if len(r) != n_cols:
-            if len(r) < n_cols:
-                r = r + [''] * (n_cols - len(r))
-            else:
-                r = r[:n_cols]
+            if len(r) < n_cols: r = r + [''] * (n_cols - len(r))
+            else: r = r[:n_cols]
             skipped += 1
         clean_rows.append([x.strip() for x in r])
     df = pd.DataFrame(clean_rows, columns=header, dtype=str).fillna('')
-    if skipped > 0:
-        st.warning(f"⚠️ Fixed {skipped} broken lines (like R 17,284). Rest loaded OK!")
+    if skipped > 0: st.warning(f"⚠️ Fixed {skipped} broken lines (like R 17,284). Rest loaded OK!")
     return df
+
+# === NEW: EDIT DOCUMENT HELPERS ===
+def make_pdf_from_text(title, text):
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    y = 60
+    page.insert_text((50, y), title, fontsize=18, fontname="helv")
+    y += 30
+    # Wrap text
+    for line in text.split("\n"):
+        # Split long lines
+        words = line.split(" ")
+        cur = ""
+        for w in words:
+            if len(cur + " " + w) > 85:
+                page.insert_text((50, y), cur, fontsize=11, fontname="helv")
+                y += 16; cur = w
+                if y > 800:
+                    page = doc.new_page(width=595, height=842); y = 60
+            else:
+                cur = (cur + " " + w).strip()
+        if cur:
+            page.insert_text((50, y), cur, fontsize=11, fontname="helv"); y += 16
+            if y > 800:
+                page = doc.new_page(width=595, height=842); y = 60
+    buf = io.BytesIO(); doc.save(buf); doc.close()
+    return buf.getvalue()
 
 def send_code(to_email, code, name=""):
     try:
@@ -85,7 +97,6 @@ def send_code(to_email, code, name=""):
     except: st.warning(f"Test mode - Your code is: {code}"); return True
 
 PLANS = {"1day": {"name": "1 Day Pass", "price": "49.00", "days": 1},"1week": {"name": "1 Week Pass", "price": "149.00", "days": 7},"1month": {"name": "1 Month Pro", "price": "399.00", "days": 30}}
-
 USE_FIREBASE = False; db = None
 try:
     import firebase_admin; from firebase_admin import credentials, firestore
@@ -128,9 +139,8 @@ def clean_data_v3(df, formulas_selected, extra_prompt=""):
         elif "email" in lc: col_map[c] = "Email"
         elif "amount" in lc or "rand" in lc or "price" in lc or "salary" in lc: col_map[c] = "Amount (R)"
         elif "depart" in lc: col_map[c] = "Department"
-        elif c.lower() == "sales" or "sale" in lc: 
-            if "amount" not in lc and "depart" not in lc:
-                col_map[c] = "Department"
+        elif c.lower() == "sales" or "sale" in lc:
+            if "amount" not in lc and "depart" not in lc: col_map[c] = "Department"
     df = df.rename(columns=col_map)
     for col in df.select_dtypes(include=['object']).columns:
         df[col] = df[col].astype(str).str.strip(); df[col] = df[col].str.replace(r'\s+', ' ', regex=True); df[col] = df[col].str.replace("nan","").str.replace("None","").str.replace("NaN","")
@@ -145,14 +155,12 @@ def clean_data_v3(df, formulas_selected, extra_prompt=""):
     if "Phone Number" in df.columns: df["Phone Number"] = df["Phone Number"].astype(str).str.replace(r'\D','',regex=True).apply(lambda x: x[-10:] if len(x)>=10 else x)
     if "Email" in df.columns: df["Email"] = df["Email"].str.lower().str.replace(' ','').str.replace(',','.')
     if "Amount (R)" in df.columns:
-        # FIXED: Handle R 17,284, not available, negative, blank
         df["Amount (R)"] = df["Amount (R)"].astype(str).str.replace('not available','', regex=False).str.replace('unknown','', regex=False)
         df["Amount (R)"] = df["Amount (R)"].str.replace(',','',regex=False)
         df["Amount (R)"] = df["Amount (R)"].str.extract(r'(-?\d+\.?\d*)')[0]
         df["Amount (R)"] = df["Amount (R)"].apply(lambda x: f"R {float(x):.2f}" if pd.notna(x) and str(x).strip()!="" and float(x) >= 0 else "")
     if "Department" in df.columns:
         df["Department"] = df["Department"].astype(str).str.strip().str.lower().str.title(); df["Department"] = df["Department"].replace({"": "Sales", "Nan": "Sales", "None": "Sales"})
-    # FIXED: Drop rows with no name AND no email (empty / TEST rows)
     if "Full Name" in df.columns:
         df = df[~((df["Full Name"].str.strip() == "") & (df.get("Email", pd.Series([""]*len(df))).str.strip() == ""))]
     df = df.drop_duplicates(); formulas_log.append(f"UNIQUE removed {original_count - len(df)}"); formulas_log.extend(formulas_selected)
@@ -207,7 +215,6 @@ End report {word_count} words professional free.
         final = " ".join(words[:word_count])
     return final
 
-# === CLICKABLE TOP BAR ===
 st.markdown("""
 <style>
 .qinetiq-bar {background:#0a1931;padding:12px 25px;display:flex;justify-content:space-between;align-items:center;color:white;position:sticky;top:0;z-index:999;border-radius:10px;margin-bottom:20px}
@@ -222,6 +229,7 @@ html {scroll-behavior: smooth;}
   <div class="menu">
     <a href="#who-we-are">Who we are</a>
     <a href="#what-we-do">What we do</a>
+    <a href="#edit-doc">✏️ Edit Document</a>
     <a href="#reports">Reports FREE</a>
     <a href="#pricing">Pricing</a>
     <a href="#contact">Contact</a>
@@ -270,6 +278,92 @@ if st.session_state.auth.get("logged_in"):
     if 'extra_prompt' not in locals(): extra_prompt=""; formulas_selected=all_formulas
     if "cleaned_data" not in st.session_state: st.session_state.cleaned_data = None; st.session_state.clean_log = None; st.session_state.orig_count = 0; st.session_state.report_text = ""; st.session_state.report_wc = 150
 
+    # === NEW: EDIT DOCUMENT SECTION - GET MORE CUSTOMERS ===
+    st.divider()
+    st.markdown('<div id="edit-doc"></div>', unsafe_allow_html=True)
+    st.subheader("✏️ Edit Any Document - PDF, Word, Excel, Image - FREE")
+    st.caption("Upload any document, edit it here, download the new version. No need for SmallPDF or Word!")
+    edit_tab1, edit_tab2, edit_tab3, edit_tab4 = st.tabs(["📄 Edit PDF", "📊 Edit Excel / CSV", "📝 Edit Text / Word", "🖼️ Edit Image Doc"])
+
+    with edit_tab1:
+        st.write("**Edit PDF:** Upload a PDF, change the text, download a new clean PDF.")
+        pdf_up = st.file_uploader("Upload PDF to Edit", type=["pdf"], key="edit_pdf")
+        if pdf_up:
+            try:
+                b = pdf_up.read(); doc = fitz.open(stream=b, filetype="pdf")
+                orig_text = "\n".join([p.get_text() for p in doc])
+                st.info(f"Found {len(doc)} pages, {len(orig_text)} characters")
+                new_title = st.text_input("New PDF Title", value=pdf_up.name.replace(".pdf","") + " - Edited by CleanData", key="pdf_title")
+                edited_text = st.text_area("Edit the text below - change names, amounts, dates, anything:", value=orig_text, height=350, key="pdf_edit")
+                c1,c2 = st.columns(2)
+                with c1:
+                    if st.button("💾 Save as New PDF", type="primary", key="save_pdf"):
+                        pdf_bytes = make_pdf_from_text(new_title, edited_text)
+                        st.download_button("⬇️ Download Edited PDF", pdf_bytes, f"{new_title}.pdf", "application/pdf", type="primary", key="dl_pdf")
+                        st.success("✅ PDF ready! Click Download above.")
+                with c2:
+                    if st.button("🧹 Clean PDF Text (Fix CAPS, Spaces)", key="clean_pdf"):
+                        cleaned = " ".join(edited_text.split())
+                        st.text_area("Cleaned Preview:", value=cleaned, height=200, key="pdf_cleaned")
+            except Exception as e: st.error(f"PDF error: {e}")
+
+    with edit_tab2:
+        st.write("**Edit Excel / CSV:** Click any cell, type to change, add rows, then download.")
+        xl_up = st.file_uploader("Upload Excel / CSV to Edit", type=["csv","xlsx","xls"], key="edit_xl")
+        if xl_up:
+            try:
+                if xl_up.name.lower().endswith(".csv"): df_edit = read_messy_csv(xl_up)
+                else: df_edit = pd.read_excel(xl_up, dtype=str).fillna('')
+                st.write("Click a cell to edit:")
+                edited_df = st.data_editor(df_edit, num_rows="dynamic", use_container_width=True, key="data_editor")
+                c1,c2 = st.columns(2)
+                with c1:
+                    csv_b = edited_df.to_csv(index=False).encode('utf-8')
+                    st.download_button("⬇️ Download Edited CSV", csv_b, "edited_clean_data.csv", "text/csv", type="primary", key="dl_edit_csv")
+                with c2:
+                    # Excel download via xlsx
+                    buf = io.BytesIO()
+                    with pd.ExcelWriter(buf, engine='openpyxl') as w: edited_df.to_excel(w, index=False)
+                    st.download_button("⬇️ Download Edited Excel", buf.getvalue(), "edited_clean_data.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary", key="dl_edit_xl")
+                st.success(f"✅ Editing {len(edited_df)} rows. Add rows with + button at bottom!")
+            except Exception as e: st.error(f"Excel error: {e}")
+
+    with edit_tab3:
+        st.write("**Edit Text / Word:** Upload .txt, paste CV, letter, invoice, edit it.")
+        txt_up = st.file_uploader("Upload Text File (or just type below)", type=["txt"], key="edit_txt")
+        default_txt = ""
+        if txt_up:
+            default_txt = txt_up.read().decode('utf-8', errors='ignore')
+        doc_title = st.text_input("Document Title", value="My Edited Document", key="txt_title")
+        edited_doc = st.text_area("Edit your document here:", value=default_txt if default_txt else "Dear Sir/Madam,\n\nI am writing to...\n\nName:\nPhone:\nDate:", height=350, key="txt_edit")
+        c1,c2 = st.columns(2)
+        with c1:
+            st.download_button("⬇️ Download as .TXT", edited_doc.encode(), "edited_document.txt", "text/plain", type="primary", key="dl_txt")
+        with c2:
+            if st.button("📄 Download as PDF", key="txt_to_pdf"):
+                pdf_b = make_pdf_from_text(doc_title, edited_doc)
+                st.download_button("⬇️ Download Edited PDF", pdf_b, f"{doc_title}.pdf", "application/pdf", type="primary", key="dl_txt_pdf")
+
+    with edit_tab4:
+        st.write("**Edit Image Document:** Upload photo of ID, invoice, receipt - we read the text, you edit it.")
+        img_up = st.file_uploader("Upload JPG / PNG", type=["jpg","jpeg","png"], key="edit_img")
+        if img_up:
+            image = Image.open(img_up); st.image(image, width=350)
+            if st.button("🔍 Read Text From Image", key="ocr_btn"):
+                try:
+                    ocr_text = pytesseract.image_to_string(image)
+                    st.session_state.ocr_text = ocr_text
+                except Exception as e: st.error(f"OCR error: {e}")
+            ocr_val = st.session_state.get("ocr_text", "")
+            if ocr_val:
+                edited_ocr = st.text_area("Edit the text we found:", value=ocr_val, height=300, key="ocr_edit")
+                if st.button("📄 Download as PDF", key="ocr_pdf"):
+                    pdf_b = make_pdf_from_text("Edited Image Document", edited_ocr)
+                    st.download_button("⬇️ Download Edited PDF", pdf_b, "edited_image_doc.pdf", "application/pdf", type="primary", key="dl_ocr_pdf")
+
+    # === CLEAN DATA SECTION ===
+    st.divider()
+    st.subheader("🧹 Clean Messy Data - 30 Formulas")
     uploaded = st.file_uploader("Upload messy CSV, Excel, JPG, PNG, PDF", type=["csv","xlsx","xls","jpg","jpeg","png","pdf"])
     if uploaded:
         try:
@@ -319,133 +413,52 @@ if st.session_state.auth.get("logged_in"):
             st.write("⭐ Rate CleanData LAI"); rating=st.feedback("stars", key="rate")
             if rating is not None: st.success(f"Thanks for {rating+1} stars! ⭐")
 
-    # === FIX - SHOW INFO WHEN LOGGED IN SO TOP BAR WORKS ===
     st.divider()
     st.markdown('<div id="who-we-are"></div>', unsafe_allow_html=True)
     with st.expander("🏢 Who We Are - Click to open", expanded=False):
-        st.markdown("""
-        **CleanData LAI** is proudly South African, founded in **2026** by **Luyanda**, based at **867 Nkosisikelela Street, Inanda, Durban KZN**.
-        We fix messy Excel in seconds. From eMatikwe to Inanda, we help spaza shops, liquor stores like Senamile Liquor, remote workers.
-        **Mission:** Make clean data for every business, not just Sandton corporates. POPIA compliant.
-        **Location:** 867 Nkosisikelela Street, Inanda, Durban 4310. **Founder:** Luyanda Lungelo Mchunu.
-        """)
+        st.markdown("**CleanData LAI** is proudly South African, founded in **2026** by **Luyanda**, based at **867 Nkosisikelela Street, Inanda, Durban KZN**. We fix messy Excel in seconds + now edit any document! From eMatikwe to Inanda, we help spaza shops, liquor stores like Senamile Liquor, remote workers. **Mission:** Make clean data for every business. POPIA compliant.")
     st.markdown('<div id="what-we-do"></div>', unsafe_allow_html=True)
     with st.expander("⚙️ What We Do - Click to open", expanded=False):
-        st.markdown("""
-        **1. Instant Data Cleaning (30 Formulas):** TRIM, CLEAN, PROPER, UNIQUE, VLOOKUP, XLOOKUP, SUMIF, SUMIFS...
-        Fix names Luyanda Dlamini, emails thandi@gmail.com, phones 0787674535, amounts R 100.00, Department Sales (not SALES, sales).
-        **2. Stock, Sales, Payroll:** Ready for Pastel/Sage, SARS VAT, HR.
-        **3. Reports FREE:** 100-500 words professional. **Different:** Cleaning in seconds + reports. No CAPS.
-        For individuals, remote workers, spaza shops, liquor stores, salons.
-        """)
+        st.markdown("**1. Instant Data Cleaning (30 Formulas):** TRIM, CLEAN, PROPER, UNIQUE, VLOOKUP, XLOOKUP, SUMIF... **2. Edit Any Document:** Edit PDF, Word, Excel, Image - change text, download new version. **3. Stock, Sales, Payroll:** Ready for Pastel/Sage, SARS VAT, HR. **4. Reports FREE:** 100-500 words professional.")
     st.markdown('<div id="pricing"></div>', unsafe_allow_html=True)
     with st.expander("💰 Pricing - Click to open", expanded=False):
-        st.markdown("**Free Trial 1 Day FREE. After: 1 Day R49, 1 Week R149, 1 Month R399. Reports FREE now, later R50-R250. PayFast secure.**")
+        st.markdown("**Free Trial 1 Day FREE. After: 1 Day R49, 1 Week R149, 1 Month R399. Reports FREE now, later R50-R250. Edit Document FREE for trial users. PayFast secure.**")
     st.markdown('<div id="contact"></div>', unsafe_allow_html=True)
     with st.expander("📞 Contact - Click to open", expanded=False):
-        st.markdown("""
-        **Phone/WhatsApp:** 078 767 4535
-        **Email:** luyandalungelo747@gmail.com
-        **Address:** 867 Nkosisikelela Street, Inanda, Durban KZN
-        **Hours:** Mon-Sat 08:00-18:00 SAST
-        [Chat WhatsApp](https://wa.me/27787674535)
-        """)
+        st.markdown("**Phone/WhatsApp:** 078 767 4535\n**Email:** luyandalungelo747@gmail.com\n**Address:** 867 Nkosisikelela Street, Inanda, Durban KZN\n**Hours:** Mon-Sat 08:00-18:00 SAST\n[Chat WhatsApp](https://wa.me/27787674535)")
         if st.button("📱 WhatsApp Now - Logged In", key="wa_in"):
             st.markdown("[Open WhatsApp](https://wa.me/27787674535)")
-
     st.stop()
 
 # PUBLIC PAGES
 st.sidebar.title("CleanData Pro")
 choice = st.sidebar.radio("Choose", ["Sign In", "Sign Up"], index=0 if st.session_state.auth["page"]=="signin" else 1)
-
 st.markdown("""
 <div class="card">
 <h2>Welcome to CleanData LAI 🚀</h2>
-<p><b>Data Cleaning in Seconds + Professional Reports</b> - Built in Durban, for South African Businesses</p>
+<p><b>Data Cleaning in Seconds + Edit Any Document + Professional Reports</b> - Built in Durban, for South African Businesses</p>
+<p>✅ Clean messy Excel &nbsp; | &nbsp; ✏️ Edit PDF, Word, Excel, Image &nbsp; | &nbsp; 📄 Free Reports</p>
 </div>
 """, unsafe_allow_html=True)
-
 st.markdown('<div id="who-we-are"></div>', unsafe_allow_html=True)
-tab1, tab2, tab3, tab4 = st.tabs(["🏢 Who We Are", "⚙️ What We Do", "💰 Pricing", "📞 Contact"])
-
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏢 Who We Are", "⚙️ What We Do", "✏️ Edit Document", "💰 Pricing", "📞 Contact"])
 with tab1:
-    st.markdown("""
-### Who We Are
-**CleanData LAI** is a proudly South African data solutions company founded in **2026** by **Luyanda**, based at **867 Nkosisikelela Street, Inanda, Durban, KwaZulu-Natal**.
-We started with a simple problem we saw in townships and small businesses: Shop owners, tavern owners, liquor stores, and remote workers spend hours fixing messy Excel sheets, sales lists, customer phone numbers, and stock reports. Data comes in CAPS, emails wrong, phone numbers missing, amounts with no R symbol, duplicates everywhere.
-We built CleanData LAI to fix that in seconds. Not hours. Seconds.
-Our mission is to make professional data cleaning accessible to every spaza shop, liquor store, salon, hardware, and startup in KZN and beyond. We believe clean data is not just for big corporates in Sandton - it is for every business that wants to grow, get SARS compliant, and know their real sales.
-We are registered, POPIA compliant, and focused on local business needs. From eMatikwe to Inanda, we understand the hustle.
-**Our Values:** Speed, Accuracy, Simplicity, and Local Support. When you call us, you speak to Luyanda, not a bot.
-**Location:** 867 Nkosisikelela Street, Inanda, Durban, 4310, KwaZulu-Natal, South Africa.
-**Founded:** 2026
-**Founder:** Luyanda Lungelo Mchunu
-""")
-
+    st.markdown("### Who We Are\n**CleanData LAI** is a proudly South African data solutions company founded in **2026** by **Luyanda**, based at **867 Nkosisikelela Street, Inanda, Durban, KwaZulu-Natal**. We fix messy Excel + edit any document in seconds. From eMatikwe to Inanda, we help spaza shops, liquor stores, salons, remote workers. POPIA compliant. **Founder:** Luyanda Lungelo Mchunu")
 with tab2:
-    st.markdown("""
-### What We Do
-**We do 3 things extremely well:**
-**1. Instant Data Cleaning (30 Excel Formulas + AI)**
-Upload messy CSV, Excel, PDF, JPG, PNG. Our system applies 30 professional formulas in seconds:
-TRIM, CLEAN, PROPER (Title Case), UPPER, LOWER, UNIQUE, IFERROR, VLOOKUP, XLOOKUP, INDEX+MATCH, SUMIF, SUMIFS, COUNTIF, ROUND, TEXTJOIN and more.
-- Fix names: `LUYANDA DLAMINI` → `Luyanda Dlamini`
-- Fix emails: `SIPHO@GMAIL.COM` → `sipho@gmail.com`
-- Fix phones: `27 78 767 4535` → `0787674535` → `078 767 4535`
-- Fix amounts: `100, 250, 300.50` → `R 100.00, R 250.00, R 300.50`
-- Fix Department: `sales, SALES, Sales` → `Sales` (professional standard)
-**2. Stock, Sales & Payroll Cleaning**
-- **Stock:** Remove duplicates, standardize product names, fix prices, ready for Pastel/Sage.
-- **Sales:** Calculate total sales R value, average sale, validate with SUMIF, ready for SARS VAT.
-- **Payroll:** Clean employee lists, ID numbers, phone numbers, fix caps, ready for HR.
-**3. Professional Business Reports - FREE for now**
-After cleaning, get a professional report in 100, 150, 200, 300, or 500 words. Includes executive summary, sales validation, data quality, formulas applied, compliance statement. Ready to send to accountant, manager, or SARS.
-**Who is it for?**
-Individuals, remote workers, spaza shops, liquor stores like Senamile Liquor, salons, small businesses, taverns, hardware stores - anyone tired of messy data.
-**What makes us different?**
-- **Speed:** Cleaning in seconds, not hours.
-- **Professional Reports:** Not just CSV, you get a real report.
-- **No CAPS:** We fix `SIPHO` to `Sipho` - looks professional.
-- **Built for SA:** Understands SA phone numbers, Rands, local businesses.
-- **Affordable:** Starts with 1-day free trial, then R49/day.
-""")
-
+    st.markdown("### What We Do\n**1. Instant Data Cleaning (30 Formulas)** - Fix names, emails, phones, amounts R 100.00, Department Sales.\n**2. Edit Any Document** - Upload PDF, Word, Excel, Image, edit text, download new version. Perfect for CVs, invoices, contracts, letters.\n**3. Stock, Sales & Payroll** - Ready for Pastel/Sage, SARS VAT.\n**4. Professional Reports FREE** - 100-500 words.\n**Who:** Individuals, remote workers, spaza shops, liquor stores, salons, taverns.")
 with tab3:
-    st.markdown("""
-### Pricing - Simple & Fair
-**Free Trial:** 1 Day FREE after email verification. Clean and get free reports.
-**After Trial:**
-- **1 Day Pass - R49:** Perfect for one-time cleaning.
-- **1 Week Pass - R149:** Best for weekly stock take / sales.
-- **1 Month Pro - R399:** Unlimited cleaning + reports. For busy shops.
-**Reports:** Currently FREE for all users (100-500 words). Later R50-R250. Get customers now!
-**Why Pay?** We keep your data safe, POPIA compliant, no ads, fast servers, support on WhatsApp.
-Pay via PayFast - secure, instant activation.
-""")
-    st.info("Sign up to see PayFast buttons - they are visible after login in sidebar.")
-
+    st.markdown("### ✏️ Edit Any Document - NEW!\n**Why pay SmallPDF? Do it here FREE on trial!**\n- **Edit PDF:** Change names, dates, amounts in a PDF, download new PDF\n- **Edit Excel / CSV:** Click any cell, change it, add rows\n- **Edit Text / Word:** Fix your CV, letter, invoice\n- **Edit Image Doc:** Photo of receipt/invoice -> read text -> edit -> PDF\n**Sign Up FREE to try it!**")
+    st.info("👉 Sign Up below to unlock Edit Document + Cleaning + Reports!")
 with tab4:
-    st.markdown("""
-### Contact Us - Real People, Real Support
-We are based in **Inanda, Durban** and we answer fast.
-**Founder:** Luyanda Lungelo Mchunu
-**Address:** 867 Nkosisikelela Street, Inanda, Durban, KwaZulu-Natal, 4310
-**Phone / WhatsApp:** 078 767 4535
-[Chat on WhatsApp](https://wa.me/27787674535)
-**Email:** luyandalungelo747@gmail.com
-**Working Hours:** Monday - Saturday, 08:00 - 18:00 SAST (Durban Time)
-**Response Time:** WhatsApp within 1 hour.
-**Support:** We help you clean your first file free on WhatsApp if you stuck.
----
-*CleanData LAI (Pty) Ltd - Data Cleaning in Seconds + Professional Reports. Founded 2026, Inanda Durban.*
-""")
+    st.markdown("### Pricing - Simple & Fair\n**Free Trial:** 1 Day FREE after email verification. Clean + Edit + Free Reports.\n**After Trial:**\n- **1 Day Pass - R49**\n- **1 Week Pass - R149**\n- **1 Month Pro - R399**\n**Reports:** Currently FREE (100-500 words). Later R50-R250.\nPay via PayFast - secure, instant activation.")
+    st.info("Sign up to see PayFast buttons - they are visible after login in sidebar.")
+with tab5:
+    st.markdown("### Contact Us\n**Founder:** Luyanda Lungelo Mchunu\n**Address:** 867 Nkosisikelela Street, Inanda, Durban, KwaZulu-Natal, 4310\n**Phone / WhatsApp:** 078 767 4535\n[Chat on WhatsApp](https://wa.me/27787674535)\n**Email:** luyandalungelo747@gmail.com\n**Hours:** Mon-Sat 08:00-18:00 SAST\n*CleanData LAI (Pty) Ltd - Data Cleaning + Edit Document + Reports. Founded 2026, Inanda Durban.*")
     if st.button("📱 Message on WhatsApp - 078 767 4535", type="primary"):
         st.markdown("[Click here to WhatsApp](https://wa.me/27787674535)", unsafe_allow_html=True)
-
 st.divider()
 if choice == "Sign Up":
-    st.title("Create Your Business Account"); st.markdown("Get 1-Day FREE Trial after email verification")
+    st.title("Create Your Business Account"); st.markdown("Get 1-Day FREE Trial after email verification - Clean + Edit Documents + Free Reports!")
     name = st.text_input("Your Full Name *", placeholder="Luyanda Dlamini", key="su_name"); company = st.text_input("Company / Business Name *", placeholder="eMatikwe Store", key="su_comp"); phone = st.text_input("Business Phone *", placeholder="078 767 4535", key="su_phone"); email = st.text_input("Business Email *", placeholder="shop@gmail.com", key="su_email")
     st.markdown("### Create Password *"); pwd = st.text_input("Create Password", type="password", placeholder="e.g. Shop@2026", key="su_pwd", label_visibility="collapsed")
     strong = False
