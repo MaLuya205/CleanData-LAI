@@ -33,6 +33,48 @@ def load_users():
     return {}
 def save_users(d): json.dump(d, open(USERS_FILE,"w"), indent=2)
 def hash_pwd(pwd): return hashlib.sha256(pwd.encode()).hexdigest()
+
+# === FIXED: MESSY CSV READER - NEVER CRASHES ON R 17,284 ===
+def read_messy_csv(uploaded):
+    """CleanData FIX: Never crash on messy CSV. Fixes R 17,284 comma bug."""
+    import csv, io
+    uploaded.seek(0)
+    raw = uploaded.read()
+    if isinstance(raw, bytes):
+        text = raw.decode('utf-8', errors='ignore')
+    else:
+        text = str(raw)
+    lines = [l for l in text.splitlines() if l.strip() != '']
+    if not lines:
+        return pd.DataFrame()
+    reader = csv.reader(io.StringIO("\n".join(lines)))
+    rows = list(reader)
+    header = [h.strip() for h in rows[0]]
+    n_cols = len(header)
+    clean_rows = []
+    skipped = 0
+    for r in rows[1:]:
+        if len(r) == 0 or all(x.strip() == '' for x in r):
+            continue
+        # FIX: Salary like "R 17,284" splits into 10 cols -> merge back to 9
+        if len(r) == n_cols + 1:
+            try:
+                r = r[:6] + [r[6] + r[7]] + r[8:]
+            except:
+                skipped += 1
+                continue
+        if len(r) != n_cols:
+            if len(r) < n_cols:
+                r = r + [''] * (n_cols - len(r))
+            else:
+                r = r[:n_cols]
+            skipped += 1
+        clean_rows.append([x.strip() for x in r])
+    df = pd.DataFrame(clean_rows, columns=header, dtype=str).fillna('')
+    if skipped > 0:
+        st.warning(f"⚠️ Fixed {skipped} broken lines (like R 17,284). Rest loaded OK!")
+    return df
+
 def send_code(to_email, code, name=""):
     try:
         user = st.secrets["EMAIL_USER"]; pwd = st.secrets["EMAIL_PASS"]
@@ -84,7 +126,7 @@ def clean_data_v3(df, formulas_selected, extra_prompt=""):
         if "name" in lc: col_map[c] = "Full Name"
         elif "phone" in lc or "cell" in lc: col_map[c] = "Phone Number"
         elif "email" in lc: col_map[c] = "Email"
-        elif "amount" in lc or "rand" in lc or "price" in lc: col_map[c] = "Amount (R)"
+        elif "amount" in lc or "rand" in lc or "price" in lc or "salary" in lc: col_map[c] = "Amount (R)"
         elif "depart" in lc: col_map[c] = "Department"
         elif c.lower() == "sales" or "sale" in lc: 
             if "amount" not in lc and "depart" not in lc:
@@ -103,9 +145,16 @@ def clean_data_v3(df, formulas_selected, extra_prompt=""):
     if "Phone Number" in df.columns: df["Phone Number"] = df["Phone Number"].astype(str).str.replace(r'\D','',regex=True).apply(lambda x: x[-10:] if len(x)>=10 else x)
     if "Email" in df.columns: df["Email"] = df["Email"].str.lower().str.replace(' ','').str.replace(',','.')
     if "Amount (R)" in df.columns:
-        df["Amount (R)"] = df["Amount (R)"].astype(str).str.replace(',','',regex=False); df["Amount (R)"] = df["Amount (R)"].str.extract(r'(\d+\.?\d*)')[0]; df["Amount (R)"] = df["Amount (R)"].apply(lambda x: f"R {float(x):.2f}" if pd.notna(x) and str(x).strip()!="" else "")
+        # FIXED: Handle R 17,284, not available, negative, blank
+        df["Amount (R)"] = df["Amount (R)"].astype(str).str.replace('not available','', regex=False).str.replace('unknown','', regex=False)
+        df["Amount (R)"] = df["Amount (R)"].str.replace(',','',regex=False)
+        df["Amount (R)"] = df["Amount (R)"].str.extract(r'(-?\d+\.?\d*)')[0]
+        df["Amount (R)"] = df["Amount (R)"].apply(lambda x: f"R {float(x):.2f}" if pd.notna(x) and str(x).strip()!="" and float(x) >= 0 else "")
     if "Department" in df.columns:
         df["Department"] = df["Department"].astype(str).str.strip().str.lower().str.title(); df["Department"] = df["Department"].replace({"": "Sales", "Nan": "Sales", "None": "Sales"})
+    # FIXED: Drop rows with no name AND no email (empty / TEST rows)
+    if "Full Name" in df.columns:
+        df = df[~((df["Full Name"].str.strip() == "") & (df.get("Email", pd.Series([""]*len(df))).str.strip() == ""))]
     df = df.drop_duplicates(); formulas_log.append(f"UNIQUE removed {original_count - len(df)}"); formulas_log.extend(formulas_selected)
     return df, original_count, len(df), original_count-len(df), formulas_log
 
@@ -225,7 +274,7 @@ if st.session_state.auth.get("logged_in"):
     if uploaded:
         try:
             df=pd.DataFrame()
-            if uploaded.name.lower().endswith(".csv"): df=pd.read_csv(uploaded, dtype=str)
+            if uploaded.name.lower().endswith(".csv"): df=read_messy_csv(uploaded)
             elif uploaded.name.lower().endswith((".xlsx","xls")): df=pd.read_excel(uploaded, dtype=str)
             elif uploaded.name.lower().endswith(".pdf"):
                 b=uploaded.read(); doc=fitz.open(stream=b,filetype="pdf"); text="".join([p.get_text() for p in doc]); lines=[l for l in text.split('\n') if l.strip()]
@@ -284,7 +333,7 @@ if st.session_state.auth.get("logged_in"):
     with st.expander("⚙️ What We Do - Click to open", expanded=False):
         st.markdown("""
         **1. Instant Data Cleaning (30 Formulas):** TRIM, CLEAN, PROPER, UNIQUE, VLOOKUP, XLOOKUP, SUMIF, SUMIFS...
-        Fix names Luyanda Dlamini, emails thandi@gmail.com, phones 0787674535, amounts R 100.00, Department Sales (not SALES).
+        Fix names Luyanda Dlamini, emails thandi@gmail.com, phones 0787674535, amounts R 100.00, Department Sales (not SALES, sales).
         **2. Stock, Sales, Payroll:** Ready for Pastel/Sage, SARS VAT, HR.
         **3. Reports FREE:** 100-500 words professional. **Different:** Cleaning in seconds + reports. No CAPS.
         For individuals, remote workers, spaza shops, liquor stores, salons.
