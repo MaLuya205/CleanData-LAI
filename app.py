@@ -182,6 +182,8 @@ def _normalise_header(name: str) -> str:
         "custmerid": "Customer ID", "customerid": "Customer ID", "clientid": "Client ID",
         "phonenumber": "Phone Number", "cellphone": "Phone Number", "phone": "Phone",
         "email": "Email", "amount": "Amount", "customername": "Customer Name",
+        "dateofbirth": "Date of Birth", "dob": "Date of Birth", "birthdate": "Date of Birth",
+        "date": "Date", "joindate": "Join Date", "createddate": "Created Date",
     }
     return aliases.get(key, raw)
 
@@ -253,39 +255,90 @@ def _normalise_department(value: str) -> str:
     }
     return known.get(key, s.title() if s else "")
 
-# ===== NEW FIX: SMART EMAIL REPAIR =====
-def _score_email(email: str, full_name: str) -> int:
-    """Score which email is most likely CORRECT for this person.
-    thandinene@gmail.com beats thandi@nene.com because:
-    - contains full name thandinene (not just thandi)
-    - real domain gmail.com beats nene.com / nene
+# ===== NEW: DATE CLEANER - DD-MM-YYYY =====
+def _clean_date(value: str) -> str:
     """
+    2024-01-05 -> 05-01-2024
+    2024/01/05 -> 05-01-2024
+    01/05/2024 -> 05-01-2024 (dayfirst!)
+    5 Jan 2024 -> 05-01-2024
+    05-01-24 -> 05-01-2024
+    blank -> blank
+    invalid -> return original (don't guess)
+    """
+    s = str(value).strip()
+    if not s or s.lower() in ("nan", "none", "null", "n/a", "na", "not provided"):
+        return s if s.lower() not in ("nan", "none", "null", "n/a", "na") else ""
+    # Already in DD-MM-YYYY? Validate it and keep it
+    if re.fullmatch(r"\d{2}-\d{2}-\d{4}", s):
+        try:
+            dt = datetime.strptime(s, "%d-%m-%Y")
+            return dt.strftime("%d-%m-%Y")
+        except ValueError:
+            return s  # e.g. 31-02-2024 invalid -> keep original
+    # Try common formats - dayfirst=True for SA
+    # First try pandas (handles Jan, January, etc)
+    try:
+        dt = pd.to_datetime(s, dayfirst=True, errors="raise")
+        # Reject if pandas guessed year 1900s for weird numbers, or if no day/month
+        # e.g. "2024" alone should NOT become 01-01-2024
+        if re.fullmatch(r"\d{4}", s):
+            return s
+        return dt.strftime("%d-%m-%Y")
+    except Exception:
+        pass
+    # Manual formats fallback
+    for fmt in ("%Y/%m/%d", "%Y.%m.%d", "%d/%m/%y", "%d.%m.%Y", "%d %B %Y", "%d %b %Y", "%B %d, %Y", "%b %d, %Y", "%Y-%m-%d %H:%M:%S", "%d-%m-%Y %H:%M"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            return dt.strftime("%d-%m-%Y")
+        except ValueError:
+            continue
+    return s  # invalid -> keep original, don't guess
+
+def _is_date_column(col_name: str, sample_values: pd.Series) -> bool:
+    """Detect if a column is a date column by name OR by content."""
+    col_lower = col_name.lower()
+    # 1. By name - strongest signal
+    if any(t in col_lower for t in ("date", "dob", "birth", "joined", "created", "start", "end", "expiry", "due")):
+        return True
+    # 2. By content - if 60%+ of non-empty values look like dates
+    vals = [str(v).strip() for v in sample_values.tolist() if str(v).strip()]
+    if len(vals) < 3:
+        return False
+    date_like = 0
+    for v in vals[:50]:  # check first 50
+        # Looks like date? 2024-01-05, 05/01/2024, 5 Jan 2024
+        if re.search(r"\d{1,4}[-/\.]\d{1,2}[-/\.]\d{2,4}", v) or re.search(r"\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)", v, re.I):
+            try:
+                pd.to_datetime(v, dayfirst=True, errors="raise")
+                date_like += 1
+            except Exception:
+                pass
+    return date_like / max(1, min(len(vals), 50)) >= 0.6
+
+def _score_email(email: str, full_name: str) -> int:
     e = email.strip().lower()
     if not valid_email(e):
-        return -100  # invalid like thandi@nene
+        return -100
     local, domain = e.split("@", 1)
     score = 0
-    # Full name in email = very strong signal
-    name_nospace = re.sub(r"[^a-z]", "", full_name.lower())  # thandinene
+    name_nospace = re.sub(r"[^a-z]", "", full_name.lower())
     first_name = full_name.lower().split()[0] if full_name.strip() else ""
     if local == name_nospace:
-        score += 50  # thandinene == thandinene
+        score += 50
     elif name_nospace in local:
         score += 30
     elif first_name and first_name in local:
         score += 10
-    # Trusted domains
     if domain in ("gmail.com", "yahoo.com", "outlook.com", "hotmail.com"):
         score += 20
     elif "." in domain and len(domain.split(".")[-1]) >= 2:
         score += 5
-    # Longer local = more complete (thandinene > thandi)
     score += len(local)
     return score
 
 def _repair_emails(df: pd.DataFrame, audit: list[str]) -> pd.DataFrame:
-    """Fix broken emails using the BEST email from same person (same Name + Phone)."""
-    # Find columns
     email_col = next((c for c in df.columns if "email" in c.lower()), None)
     name_col = next((c for c in df.columns if c.lower() in ("customer name", "name", "customer", "client name")), None)
     phone_col = next((c for c in df.columns if "phone" in c.lower() or "cell" in c.lower() or "mobile" in c.lower()), None)
@@ -293,30 +346,21 @@ def _repair_emails(df: pd.DataFrame, audit: list[str]) -> pd.DataFrame:
         return df
     df = df.copy()
     fixed = 0
-    # Group by Name + Phone = same person
     for (name, phone), group in df.groupby([name_col, phone_col], dropna=False):
         if len(group) < 2:
-            # Single row: if invalid, we can't know correct - leave it flagged
             continue
         emails = [str(x).strip().lower() for x in group[email_col].tolist() if str(x).strip()]
         if not emails:
             continue
-        # Find best valid email in group
         valid = [e for e in emails if valid_email(e)]
         if not valid:
             continue
-        # Score all valid emails, pick winner
         best = max(valid, key=lambda e: _score_email(e, str(name)))
-        # Fix every row in group that is NOT best
         for idx in group.index:
             cur = str(df.at[idx, email_col]).strip().lower()
             if cur != best:
-                # Only fix if current is invalid OR is a "short" version of best
-                # e.g. thandi@nene (invalid) -> thandinene@gmail.com
-                # thandi@nene.com (valid but wrong) -> thandinene@gmail.com IF best scores much higher
                 cur_score = _score_email(cur, str(name))
                 best_score = _score_email(best, str(name))
-                # Fix if current is invalid, OR best is clearly better (+20 points)
                 if not valid_email(cur) or (best_score - cur_score >= 20):
                     df.at[idx, email_col] = best
                     fixed += 1
@@ -324,7 +368,7 @@ def _repair_emails(df: pd.DataFrame, audit: list[str]) -> pd.DataFrame:
         audit.append(f"Email: repaired {fixed} email(s) using the correct email from the same person (same Name + Phone). Example: thandi@nene / thandi@nene.com -> thandinene@gmail.com")
     return df
 
-def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bool, normalize_case: bool, trim_text: bool, standardize_business_fields: bool = True, normalize_numbers: bool = True) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bool, normalize_case: bool, trim_text: bool, standardize_business_fields: bool = True, normalize_numbers: bool = True, normalize_dates: bool = True) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     df = normalize_columns(source.copy())
     audit: list[str] = []
     before_rows = len(df)
@@ -358,13 +402,21 @@ def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bo
         is_money_col = any(t in col_lower for t in ("amount", "price", "cost", "salary", "revenue", "total", "balance", "payment"))
         is_phone_col = any(t in col_lower for t in ("phone", "cell", "mobile", "contact"))
         is_email_col = "email" in col_lower
+        # DATE - NEW
+        is_date_col = _is_date_column(col, new) if normalize_dates else False
         if col_lower == "department" and standardize_business_fields:
             new = new.map(_normalise_department)
         if is_phone_col:
             new = new.map(_clean_phone)
         elif is_email_col:
             new = new.str.lower().str.strip()
-            # Don't flag yet - we will repair first, then flag what is left
+        elif is_date_col:
+            # Date cleaning - BEFORE name cleaning, dates are not names
+            new = new.map(_clean_date)
+            invalid_dates = new.ne("") & ~new.str.fullmatch(r"\d{2}-\d{2}-\d{4}", na=False)
+            # Count values that still don't look like DD-MM-YYYY after cleaning
+            if invalid_dates.any():
+                audit.append(f"{col}: flagged {int(invalid_dates.sum())} date value(s) that could not be parsed to DD-MM-YYYY; preserved for review.")
         elif normalize_case and any(token in col_lower for token in ("name", "customer", "client")):
             if not any(token in col_lower for token in ("id", "code", "number")):
                 new = new.str.title()
@@ -376,7 +428,7 @@ def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bo
                     return v
                 return _clean_currency(v, force_r=True)
             new = new.map(_safe_money)
-        elif normalize_numbers and not is_phone_col:
+        elif normalize_numbers and not is_phone_col and not is_date_col:
             mask = new.str.fullmatch(r"(?i)R\s*[+-]?[\d\s,\.]+", na=False)
             if mask.any():
                 new.loc[mask] = new.loc[mask].map(lambda x: _clean_currency(x, force_r=False))
@@ -385,16 +437,12 @@ def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bo
             audit.append(f"{col}: standardised {changed} cell(s).")
         df[col] = new
 
-    # ===== NEW: REPAIR EMAILS BEFORE DUPLICATE CHECK =====
     df = _repair_emails(df, audit)
-
-    # After repair, flag any STILL-invalid emails
     email_col = next((c for c in df.columns if "email" in c.lower()), None)
     if email_col:
         invalid = df[email_col].astype(str).ne("") & ~df[email_col].astype(str).str.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
         if invalid.any():
             audit.append(f"{email_col}: flagged {int(invalid.sum())} invalid email value(s) that could not be repaired from same person; preserved for review.")
-
     missing_count = int(df.eq("").sum().sum())
     if missing_policy == "Drop rows with missing values":
         before = len(df)
@@ -406,15 +454,10 @@ def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bo
         audit.append("Filled blank cells with 'Not provided' at the user's request.")
     else:
         audit.append(f"Preserved {missing_count} blank cell(s); no missing values were guessed.")
-
-    # ===== NEW: SMART DUPLICATES - Email differences don't hide duplicates =====
     if remove_duplicates:
-        # 1) Exact duplicates after cleaning + email repair
         before_dedup = len(df)
         df = df.drop_duplicates().copy()
         exact_removed = before_dedup - len(df)
-        # 2) Smart duplicates: Same Person (Name+Phone) + Same Amount + Same Department = duplicate
-        # Even if something else slightly differs, it's same transaction
         smart_removed = 0
         name_col = next((c for c in df.columns if c.lower() in ("customer name", "name", "customer", "client name")), None)
         phone_col = next((c for c in df.columns if "phone" in c.lower() or "cell" in c.lower()), None)
@@ -425,7 +468,6 @@ def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bo
             if dept_col:
                 subset.append(dept_col)
             before_smart = len(df)
-            # Keep first occurrence - it now has repaired email
             df = df.drop_duplicates(subset=subset, keep="first").copy()
             smart_removed = before_smart - len(df)
         total_removed = exact_removed + smart_removed
@@ -433,7 +475,6 @@ def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bo
             audit.append(f"Removed {total_removed} duplicate row(s) (exact + same person + same amount, even if email had typos).")
         else:
             audit.append("Removed 0 duplicate row(s).")
-
     audit.insert(0, f"Input rows: {before_rows}; output rows: {len(df)}.")
     audit.append(f"Output columns: {len(df.columns)}.")
     audit.append("Review standardised values before using them in financial, payroll or legal records.")
@@ -724,8 +765,10 @@ def workspace(email: str):
                     trim_text = st.checkbox("Trim and normalize whitespace", value=True)
                     standardize_business_fields = st.checkbox("Correct common business headers and department names", value=True)
                     normalize_numbers = st.checkbox("Normalise currency and numeric amount fields", value=True)
+                    # NEW DATE CHECKBOX
+                    normalize_dates = st.checkbox("Normalise dates to DD-MM-YYYY", value=True)
                     if st.button("Run cleaning & validation", type="primary"):
-                        cleaned, audit_df, audit = clean_table(frame, missing_policy, remove_duplicates, normalize_case, trim_text, standardize_business_fields=standardize_business_fields, normalize_numbers=normalize_numbers)
+                        cleaned, audit_df, audit = clean_table(frame, missing_policy, remove_duplicates, normalize_case, trim_text, standardize_business_fields=standardize_business_fields, normalize_numbers=normalize_numbers, normalize_dates=normalize_dates)
                         st.session_state.cleaned_df = cleaned
                         st.session_state.clean_audit = audit_df
                         st.success("Cleaning completed. Review the audit before exporting.")
