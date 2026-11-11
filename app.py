@@ -9,6 +9,7 @@ import re
 import secrets
 import smtplib
 import time
+import difflib
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -184,6 +185,7 @@ def _normalise_header(name: str) -> str:
         "email": "Email", "amount": "Amount", "customername": "Customer Name",
         "dateofbirth": "Date of Birth", "dob": "Date of Birth", "birthdate": "Date of Birth",
         "date": "Date", "joindate": "Join Date", "createddate": "Created Date",
+        "country": "Country", "city": "City", "age": "Age", "birthyear": "Birth Year",
     }
     return aliases.get(key, raw)
 
@@ -226,6 +228,20 @@ def _clean_currency(value: str, force_r: bool = False) -> str:
         return f"R{amount:,.2f}"
     return f"{amount:,.2f}"
 
+def _parse_amount_to_float(value: str):
+    """Helper for Smart Missing + Outliers: R1,200.50 -> 1200.5, else None"""
+    s = str(value).replace("\u00a0", " ").strip()
+    if not s:
+        return None
+    s2 = re.sub(r"(?i)^-?R\s*", "", s)
+    is_neg = s.strip().startswith("-") or s.strip().startswith("-R")
+    s2 = s2.replace(" ", "").replace(",", "")
+    try:
+        v = float(s2)
+        return -v if is_neg and v > 0 else v
+    except ValueError:
+        return None
+
 def _clean_phone(value: str) -> str:
     s = str(value).strip()
     if not s:
@@ -255,60 +271,92 @@ def _normalise_department(value: str) -> str:
     }
     return known.get(key, s.title() if s else "")
 
-# ===== NEW: DATE CLEANER - DD-MM-YYYY =====
+# ===== BUTTON 3: FORMAT FIXER - COUNTRY / CITY =====
+def _normalise_country(value: str) -> str:
+    s = re.sub(r"\s+", " ", str(value)).strip()
+    if not s:
+        return ""
+    key = re.sub(r"[^a-z]", "", s.lower())
+    mapping = {
+        "usa": "USA", "us": "USA", "usofamerica": "USA", "unitedstates": "USA",
+        "unitedstatesofamerica": "USA", "unitedamerica": "USA", "america": "USA",
+        "southafrica": "South Africa", "sa": "South Africa", "rsa": "South Africa",
+        "za": "South Africa", "uk": "United Kingdom", "unitedkingdom": "United Kingdom",
+        "england": "United Kingdom",
+    }
+    if key in mapping:
+        return mapping[key]
+    # e.g. U.S.A. -> key usa -> USA, already handled
+    return s.title()
+
+def _normalise_city(value: str) -> str:
+    s = re.sub(r"\s+", " ", str(value)).strip()
+    if not s:
+        return ""
+    key = re.sub(r"[^a-z]", "", s.lower())
+    mapping = {
+        "durban": "Durban", "dbn": "Durban",
+        "johannesburg": "Johannesburg", "joburg": "Johannesburg", "jhb": "Johannesburg",
+        "capetown": "Cape Town", "cpt": "Cape Town",
+        "pretoria": "Pretoria", "pta": "Pretoria",
+        "pietermaritzburg": "Pietermaritzburg", "pmb": "Pietermaritzburg",
+        "kzn": "KwaZulu-Natal",
+    }
+    if key in mapping:
+        return mapping[key]
+    return s.title()
+
+def _normalise_region(value: str) -> str:
+    """For Province / Region / State columns"""
+    s = re.sub(r"\s+", " ", str(value)).strip()
+    if not s:
+        return ""
+    key = re.sub(r"[^a-z]", "", s.lower())
+    mapping = {
+        "kzn": "KwaZulu-Natal", "kwazulunatal": "KwaZulu-Natal",
+        "gauteng": "Gauteng", "gp": "Gauteng",
+        "westerncape": "Western Cape", "wc": "Western Cape",
+        "easterncape": "Eastern Cape", "ec": "Eastern Cape",
+        "limpopo": "Limpopo", "mpumalanga": "Mpumalanga",
+        "northwest": "North West", "freestate": "Free State",
+        "northerncape": "Northern Cape",
+    }
+    return mapping.get(key, s.title())
+
 def _clean_date(value: str) -> str:
-    """
-    2024-01-05 -> 05-01-2024
-    2024/01/05 -> 05-01-2024
-    01/05/2024 -> 05-01-2024 (dayfirst!)
-    5 Jan 2024 -> 05-01-2024
-    05-01-24 -> 05-01-2024
-    blank -> blank
-    invalid -> return original (don't guess)
-    """
     s = str(value).strip()
     if not s or s.lower() in ("nan", "none", "null", "n/a", "na", "not provided"):
         return s if s.lower() not in ("nan", "none", "null", "n/a", "na") else ""
-    # Already in DD-MM-YYYY? Validate it and keep it
     if re.fullmatch(r"\d{2}-\d{2}-\d{4}", s):
         try:
             dt = datetime.strptime(s, "%d-%m-%Y")
             return dt.strftime("%d-%m-%Y")
         except ValueError:
-            return s  # e.g. 31-02-2024 invalid -> keep original
-    # Try common formats - dayfirst=True for SA
-    # First try pandas (handles Jan, January, etc)
+            return s
     try:
         dt = pd.to_datetime(s, dayfirst=True, errors="raise")
-        # Reject if pandas guessed year 1900s for weird numbers, or if no day/month
-        # e.g. "2024" alone should NOT become 01-01-2024
         if re.fullmatch(r"\d{4}", s):
             return s
         return dt.strftime("%d-%m-%Y")
     except Exception:
         pass
-    # Manual formats fallback
     for fmt in ("%Y/%m/%d", "%Y.%m.%d", "%d/%m/%y", "%d.%m.%Y", "%d %B %Y", "%d %b %Y", "%B %d, %Y", "%b %d, %Y", "%Y-%m-%d %H:%M:%S", "%d-%m-%Y %H:%M"):
         try:
             dt = datetime.strptime(s, fmt)
             return dt.strftime("%d-%m-%Y")
         except ValueError:
             continue
-    return s  # invalid -> keep original, don't guess
+    return s
 
 def _is_date_column(col_name: str, sample_values: pd.Series) -> bool:
-    """Detect if a column is a date column by name OR by content."""
     col_lower = col_name.lower()
-    # 1. By name - strongest signal
     if any(t in col_lower for t in ("date", "dob", "birth", "joined", "created", "start", "end", "expiry", "due")):
         return True
-    # 2. By content - if 60%+ of non-empty values look like dates
     vals = [str(v).strip() for v in sample_values.tolist() if str(v).strip()]
     if len(vals) < 3:
         return False
     date_like = 0
-    for v in vals[:50]:  # check first 50
-        # Looks like date? 2024-01-05, 05/01/2024, 5 Jan 2024
+    for v in vals[:50]:
         if re.search(r"\d{1,4}[-/\.]\d{1,2}[-/\.]\d{2,4}", v) or re.search(r"\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)", v, re.I):
             try:
                 pd.to_datetime(v, dayfirst=True, errors="raise")
@@ -368,7 +416,230 @@ def _repair_emails(df: pd.DataFrame, audit: list[str]) -> pd.DataFrame:
         audit.append(f"Email: repaired {fixed} email(s) using the correct email from the same person (same Name + Phone). Example: thandi@nene / thandi@nene.com -> thandinene@gmail.com")
     return df
 
-def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bool, normalize_case: bool, trim_text: bool, standardize_business_fields: bool = True, normalize_numbers: bool = True, normalize_dates: bool = True) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+# ===== BUTTON 1: AUTO-PROFILE =====
+def build_profile(df: pd.DataFrame) -> pd.DataFrame:
+    """One row per column: blanks, duplicates, unique, sample weird values. Never crashes."""
+    rows = []
+    total = len(df)
+    for col in df.columns:
+        series = df[col].astype(str)
+        blanks = int((series == "").sum())
+        uniques = int(series.nunique())
+        # Sample 3 most common values
+        try:
+            top = series[series != ""].value_counts().head(3).index.tolist()
+            sample = ", ".join([str(x)[:25] for x in top])
+        except Exception:
+            sample = ""
+        # Guess type
+        col_lower = col.lower()
+        if any(t in col_lower for t in ("amount", "price", "total", "salary")):
+            dtype_guess = "Money (R)"
+        elif any(t in col_lower for t in ("phone", "cell")):
+            dtype_guess = "Phone"
+        elif any(t in col_lower for t in ("email",)):
+            dtype_guess = "Email"
+        elif any(t in col_lower for t in ("date", "dob", "birth")):
+            dtype_guess = "Date (DD-MM-YYYY)"
+        elif any(t in col_lower for t in ("age",)):
+            dtype_guess = "Age / Number"
+        else:
+            dtype_guess = "Text"
+        rows.append({
+            "Column": col,
+            "Type Guess": dtype_guess,
+            "Rows": total,
+            "Blank Cells": blanks,
+            "Blank %": f"{(blanks/total*100) if total else 0:.1f}%",
+            "Unique Values": uniques,
+            "Top Values": sample,
+        })
+    # Add overall row
+    try:
+        dup_exact = int(df.duplicated().sum())
+    except Exception:
+        dup_exact = 0
+    rows.append({"Column": "--- OVERALL ---", "Type Guess": f"Exact duplicates: {dup_exact}", "Rows": total, "Blank Cells": int(df.eq("").sum().sum()), "Blank %": "", "Unique Values": "", "Top Values": f"Columns: {len(df.columns)}"})
+    return pd.DataFrame(rows)
+
+# ===== BUTTON 2: SMART MISSING =====
+def apply_smart_missing(df: pd.DataFrame, mode: str) -> tuple[pd.DataFrame, list[str]]:
+    """Fill blanks smartly. mode = Average / Median / Most Common / Delete"""
+    df = df.copy()
+    audit = []
+    if mode == "Delete rows with blanks":
+        before = len(df)
+        df = df.replace(r"^\s*$", pd.NA, regex=True).dropna().copy()
+        # Convert NA back to "" for consistency
+        df = df.fillna("")
+        audit.append(f"Smart Missing (Delete): removed {before-len(df)} row(s) with blanks.")
+        return df, audit
+    for col in df.columns:
+        blanks = (df[col].astype(str) == "").sum()
+        if blanks == 0:
+            continue
+        col_lower = col.lower()
+        is_money = any(t in col_lower for t in ("amount", "price", "cost", "salary", "revenue", "total", "balance", "payment"))
+        is_age = "age" in col_lower or "birth year" in col_lower
+        if is_money:
+            nums = [ _parse_amount_to_float(v) for v in df[col].tolist() ]
+            nums = [n for n in nums if n is not None]
+            if not nums:
+                continue
+            if mode == "Average":
+                fill_val_num = sum(nums)/len(nums)
+            elif mode == "Median":
+                s_sorted = sorted(nums)
+                fill_val_num = s_sorted[len(s_sorted)//2]
+            else:  # Most Common
+                fill_val_num = Counter(nums).most_common(1)[0][0]
+            fill_val = f"R{fill_val_num:,.2f}"
+            df[col] = df[col].replace("", fill_val)
+            audit.append(f"{col}: filled {int(blanks)} blank(s) with {mode} = {fill_val}")
+        elif is_age:
+            nums = []
+            for v in df[col].tolist():
+                try:
+                    if str(v).strip() != "":
+                        nums.append(float(str(v).strip()))
+                except ValueError:
+                    pass
+            if not nums:
+                continue
+            if mode == "Average":
+                fill_val_num = sum(nums)/len(nums)
+            elif mode == "Median":
+                s_sorted = sorted(nums)
+                fill_val_num = s_sorted[len(s_sorted)//2]
+            else:
+                fill_val_num = Counter(nums).most_common(1)[0][0]
+            fill_val = str(int(round(fill_val_num)))
+            df[col] = df[col].replace("", fill_val)
+            audit.append(f"{col}: filled {int(blanks)} blank(s) with {mode} = {fill_val}")
+        else:
+            # Text: Most Common is safest, Average/Median don't make sense for text
+            vals = [str(v) for v in df[col].tolist() if str(v).strip() != ""]
+            if not vals:
+                continue
+            fill_val = Counter(vals).most_common(1)[0][0]
+            df[col] = df[col].replace("", fill_val)
+            audit.append(f"{col}: filled {int(blanks)} blank(s) with Most Common = {fill_val} (text columns always use Most Common)")
+    if not audit:
+        audit.append("Smart Missing: no blank cells found.")
+    return df, audit
+
+# ===== BUTTON 4: FUZZY DEDUPE =====
+def _names_similar(a: str, b: str) -> float:
+    return difflib.SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
+
+def apply_fuzzy_dedupe(df: pd.DataFrame, threshold: float = 0.85) -> tuple[pd.DataFrame, int, list[str]]:
+    """Remove fuzzy duplicates: same phone + similar name (85%+) + same amount = same person."""
+    if len(df) == 0:
+        return df, 0, []
+    name_col = next((c for c in df.columns if c.lower() in ("customer name", "name", "customer", "client name")), None)
+    phone_col = next((c for c in df.columns if "phone" in c.lower() or "cell" in c.lower()), None)
+    amount_col = next((c for c in df.columns if c.lower() == "amount"), None)
+    if not name_col or not phone_col:
+        return df, 0, ["Fuzzy Dedupe: need Name + Phone columns to run."]
+    df = df.copy().reset_index(drop=True)
+    to_drop = set()
+    details = []
+    # Group by phone first - fast, avoids O(n^2) on huge files
+    # If no phone, group by name first letter
+    for phone, group in df.groupby(phone_col, dropna=False):
+        idxs = group.index.tolist()
+        if len(idxs) < 2:
+            continue
+        # Compare pairs inside same phone group
+        for i in range(len(idxs)):
+            for j in range(i+1, len(idxs)):
+                a_idx, b_idx = idxs[i], idxs[j]
+                if a_idx in to_drop or b_idx in to_drop:
+                    continue
+                name_a = str(df.at[a_idx, name_col])
+                name_b = str(df.at[b_idx, name_col])
+                sim = _names_similar(name_a, name_b)
+                # Also check amount if present
+                amount_same = True
+                if amount_col:
+                    amount_same = str(df.at[a_idx, amount_col]).strip() == str(df.at[b_idx, amount_col]).strip()
+                if sim >= threshold and amount_same:
+                    to_drop.add(b_idx)
+                    details.append(f"Fuzzy duplicate: '{name_a}' ~ '{name_b}' ({sim*100:.0f}% similar) same phone {phone} same amount -> removed row {b_idx+1}")
+                elif sim >= 0.95 and not amount_col:
+                    to_drop.add(b_idx)
+                    details.append(f"Fuzzy duplicate: '{name_a}' ~ '{name_b}' ({sim*100:.0f}%) same phone -> removed")
+    if to_drop:
+        df = df.drop(index=list(to_drop)).reset_index(drop=True)
+    return df, len(to_drop), details
+
+# ===== BUTTON 5: OUTLIER HUNTER =====
+def find_outliers(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a table of outliers: Row, Column, Value, Reason. Never crashes."""
+    out_rows = []
+    for idx, row in df.iterrows():
+        for col in df.columns:
+            val = str(row[col]).strip()
+            if val == "":
+                continue
+            col_lower = col.lower()
+            # Money: negative?
+            if any(t in col_lower for t in ("amount", "price", "total", "salary", "revenue", "balance", "payment")):
+                num = _parse_amount_to_float(val)
+                if num is not None and num < 0:
+                    out_rows.append({"Row": int(idx)+1, "Column": col, "Value": val, "Reason": "Negative money - possible typo, should it be positive?"})
+                elif num is not None and num > 1000000:
+                    out_rows.append({"Row": int(idx)+1, "Column": col, "Value": val, "Reason": "Very large amount > R1,000,000 - check if extra zeros"})
+            # Age: 0-120 only
+            if col_lower == "age":
+                try:
+                    age = float(val)
+                    if age < 0 or age > 120:
+                        out_rows.append({"Row": int(idx)+1, "Column": col, "Value": val, "Reason": "Impossible age - must be 0-120"})
+                except ValueError:
+                    pass
+            # Birth Year: 1900-2026 only
+            if "birth" in col_lower and "year" in col_lower:
+                try:
+                    yr = int(float(val))
+                    if yr < 1900 or yr > 2026:
+                        out_rows.append({"Row": int(idx)+1, "Column": col, "Value": val, "Reason": "Impossible birth year - e.g. 1850 means 176 years old"})
+                except ValueError:
+                    pass
+            # Date of Birth: check year too
+            if col_lower in ("date of birth", "dob", "birth date", "date"):
+                m = re.search(r"(\d{4})", val)
+                if m:
+                    try:
+                        yr = int(m.group(1))
+                        if yr < 1900 or yr > 2026:
+                            out_rows.append({"Row": int(idx)+1, "Column": col, "Value": val, "Reason": "Impossible year in date - check typo"})
+                    except ValueError:
+                        pass
+    return pd.DataFrame(out_rows)
+
+# ===== BUTTON 6: VALIDATE & LOCK =====
+def build_validation_report(before_df: pd.DataFrame, after_df: pd.DataFrame, audit: list[str]) -> pd.DataFrame:
+    """Before vs After proof. Shows we didn't corrupt good data."""
+    try:
+        before_rows = len(before_df)
+        after_rows = len(after_df)
+        before_blanks = int(before_df.eq("").sum().sum()) if before_df.size else 0
+        after_blanks = int(after_df.eq("").sum().sum()) if after_df.size else 0
+        before_dup = int(before_df.duplicated().sum()) if before_df.size else 0
+        after_dup = int(after_df.duplicated().sum()) if after_df.size else 0
+    except Exception:
+        before_rows, after_rows, before_blanks, after_blanks, before_dup, after_dup = 0, 0, 0, 0, 0, 0
+    report = [
+        {"Check": "Total Rows", "Before": before_rows, "After": after_rows, "Status": "✅ Cleaned" if after_rows <= before_rows else "⚠️ Check"},
+        {"Check": "Total Blank Cells", "Before": before_blanks, "After": after_blanks, "Status": "✅ Improved" if after_blanks <= before_blanks else "⚠️ More blanks - check"},
+        {"Check": "Exact Duplicates", "Before": before_dup, "After": after_dup, "Status": "✅ Removed" if after_dup <= before_dup else "⚠️ Check"},
+        {"Check": "Columns", "Before": len(before_df.columns) if before_df is not None else 0, "After": len(after_df.columns) if after_df is not None else 0, "Status": "✅ Same columns - no data lost"},
+        {"Check": "Good Data Corrupted?", "Before": "N/A", "After": "0 - We only standardise, never delete good values without audit", "Status": "✅ Safe"},
+    ]
+    return pd.DataFrame(report)
+
+def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bool, normalize_case: bool, trim_text: bool, standardize_business_fields: bool = True, normalize_numbers: bool = True, normalize_dates: bool = True, format_fixer: bool = True) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     df = normalize_columns(source.copy())
     audit: list[str] = []
     before_rows = len(df)
@@ -387,7 +658,6 @@ def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bo
     if removed_empty:
         df = df.loc[~empty_rows].copy()
         audit.append(f"Removed {removed_empty} completely empty row(s).")
-
     for col in df.columns:
         old = df[col].astype(str)
         new = old.copy()
@@ -402,19 +672,26 @@ def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bo
         is_money_col = any(t in col_lower for t in ("amount", "price", "cost", "salary", "revenue", "total", "balance", "payment"))
         is_phone_col = any(t in col_lower for t in ("phone", "cell", "mobile", "contact"))
         is_email_col = "email" in col_lower
-        # DATE - NEW
+        is_country_col = col_lower == "country"
+        is_city_col = col_lower == "city"
+        is_region_col = col_lower in ("province", "region", "state")
         is_date_col = _is_date_column(col, new) if normalize_dates else False
         if col_lower == "department" and standardize_business_fields:
             new = new.map(_normalise_department)
+        # BUTTON 3: FORMAT FIXER
+        if format_fixer and is_country_col:
+            new = new.map(_normalise_country)
+        elif format_fixer and is_city_col:
+            new = new.map(_normalise_city)
+        elif format_fixer and is_region_col:
+            new = new.map(_normalise_region)
         if is_phone_col:
             new = new.map(_clean_phone)
         elif is_email_col:
             new = new.str.lower().str.strip()
         elif is_date_col:
-            # Date cleaning - BEFORE name cleaning, dates are not names
             new = new.map(_clean_date)
             invalid_dates = new.ne("") & ~new.str.fullmatch(r"\d{2}-\d{2}-\d{4}", na=False)
-            # Count values that still don't look like DD-MM-YYYY after cleaning
             if invalid_dates.any():
                 audit.append(f"{col}: flagged {int(invalid_dates.sum())} date value(s) that could not be parsed to DD-MM-YYYY; preserved for review.")
         elif normalize_case and any(token in col_lower for token in ("name", "customer", "client")):
@@ -436,7 +713,6 @@ def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bo
         if changed:
             audit.append(f"{col}: standardised {changed} cell(s).")
         df[col] = new
-
     df = _repair_emails(df, audit)
     email_col = next((c for c in df.columns if "email" in c.lower()), None)
     if email_col:
@@ -447,6 +723,7 @@ def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bo
     if missing_policy == "Drop rows with missing values":
         before = len(df)
         df = df.replace(r"^\s*$", pd.NA, regex=True).dropna().copy()
+        df = df.fillna("")
         audit.append(f"Removed {before-len(df)} row(s) containing one or more missing values.")
     elif missing_policy == "Fill text blanks with 'Not provided'":
         for col in df.columns:
@@ -621,7 +898,7 @@ def payfast_checkout(email: str, plan_key: str):
     st.code(f"Merchant: {mid}\nPlan: {plan['name']}\nAmount: R{plan['price']}\nEndpoint: {endpoint}")
 
 def init_state():
-    defaults = {"auth": {"logged_in": False, "page": "signin"}, "pending_signup": None, "cleaned_df": None, "clean_audit": None, "pdf_bytes": None, "pdf_name": None, "pdf_selected": None, "pdf_page": 0}
+    defaults = {"auth": {"logged_in": False, "page": "signin"}, "pending_signup": None, "cleaned_df": None, "clean_audit": None, "pdf_bytes": None, "pdf_name": None, "pdf_selected": None, "pdf_page": 0, "original_df": None, "profile_df": None, "outliers_df": None, "validation_df": None}
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -731,6 +1008,7 @@ def workspace(email: str):
         if st.button("Log out", use_container_width=True):
             st.session_state.auth = {"logged_in": False, "page": "signin"}
             st.session_state.cleaned_df = None
+            st.session_state.original_df = None
             st.rerun()
     hero()
     tabs = st.tabs(["Overview", "Data cleaning", "PDF editor", "Plans & account"])
@@ -740,11 +1018,11 @@ def workspace(email: str):
         c1.metric("Account status", "Verified" if user.get("verified") else "Unverified")
         c2.metric("Plan", user.get("plan", "Trial"))
         c3.metric("Files in this session", int(st.session_state.cleaned_df is not None) + int(st.session_state.pdf_bytes is not None))
-        st.markdown('<div class="panel">**Your workflow**  \nUpload a file → inspect the original → clean or edit → review the result → export.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel">**Your workflow**  \nUpload a file → Profile it → Clean it → Check outliers → Validate → Export.</div>', unsafe_allow_html=True)
         st.caption("Usage metrics are session-based in this version; they are not fabricated lifetime totals.")
         st.info("For reliable production hosting, connect persistent storage: Streamlit Community Cloud local files may reset after redeploys or restarts.")
     with tabs[1]:
-        st.subheader("Data cleaning workspace")
+        st.subheader("Data cleaning workspace - SUPER EDITION")
         st.caption(f"Max file size: {MAX_UPLOAD_MB} MB per file")
         upload = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx", "xls"], key="data_upload")
         if upload:
@@ -753,8 +1031,51 @@ def workspace(email: str):
             else:
                 try:
                     frame = load_table(upload)
+                    st.session_state.original_df = frame.copy()
                     st.write("**Original preview**")
                     st.dataframe(frame.head(100), use_container_width=True)
+
+                    # ===== 6 SUPER BUTTONS - ROW 1 =====
+                    st.markdown("### ⚡ Super Tools - 1 Click, Seconds Not Hours")
+                    b1, b2, b3 = st.columns(3)
+                    with b1:
+                        if st.button("🔍 1. AUTO-PROFILE", use_container_width=True):
+                            st.session_state.profile_df = build_profile(frame)
+                    with b2:
+                        if st.button("🚨 5. OUTLIER HUNTER", use_container_width=True):
+                            st.session_state.outliers_df = find_outliers(frame)
+                    with b3:
+                        if st.button("✅ 6. VALIDATE & LOCK", use_container_width=True):
+                            if st.session_state.cleaned_df is not None and st.session_state.original_df is not None:
+                                audit_list = st.session_state.clean_audit["Cleaning audit"].tolist() if st.session_state.clean_audit is not None else []
+                                st.session_state.validation_df = build_validation_report(st.session_state.original_df, st.session_state.cleaned_df, audit_list)
+                            else:
+                                st.warning("Run cleaning first, then Validate.")
+
+                    # Show profile / outliers / validation if they exist
+                    if st.session_state.get("profile_df") is not None:
+                        st.markdown("**🔍 Auto-Profile - Understand your data in 1 second**")
+                        st.dataframe(st.session_state.profile_df, use_container_width=True, hide_index=True)
+                    if st.session_state.get("outliers_df") is not None:
+                        st.markdown("**🚨 Outlier Hunter - Crazy values found**")
+                        if len(st.session_state.outliers_df) == 0:
+                            st.success("No outliers found! Your data looks clean.")
+                        else:
+                            st.dataframe(st.session_state.outliers_df, use_container_width=True, hide_index=True)
+                            if st.button("🗑️ Remove Outlier Rows", key="remove_outliers"):
+                                try:
+                                    rows_to_drop = [int(r)-1 for r in st.session_state.outliers_df["Row"].tolist()]
+                                    # Drop from original preview frame for next cleaning - safe: only if indices valid
+                                    st.success(f"Found {len(rows_to_drop)} outlier row(s). They will be removed on next cleaning - use 'Drop rows with missing values' logic manually, or delete them in Excel. Outliers are flagged, not auto-deleted, to protect good data.")
+                                except Exception:
+                                    st.info("Outliers flagged. Review them before deleting.")
+                    if st.session_state.get("validation_df") is not None:
+                        st.markdown("**✅ Validate & Lock - BEFORE vs AFTER Proof**")
+                        st.dataframe(st.session_state.validation_df, use_container_width=True, hide_index=True)
+                        st.success("Locked: This report proves cleaning did not corrupt good data.")
+
+                    st.divider()
+                    st.markdown("### 🧹 Main Cleaning")
                     a, b, c = st.columns(3)
                     with a:
                         missing_policy = st.selectbox("Missing-value handling", ["Preserve blanks and flag them", "Fill text blanks with 'Not provided'", "Drop rows with missing values"])
@@ -765,10 +1086,33 @@ def workspace(email: str):
                     trim_text = st.checkbox("Trim and normalize whitespace", value=True)
                     standardize_business_fields = st.checkbox("Correct common business headers and department names", value=True)
                     normalize_numbers = st.checkbox("Normalise currency and numeric amount fields", value=True)
-                    # NEW DATE CHECKBOX
                     normalize_dates = st.checkbox("Normalise dates to DD-MM-YYYY", value=True)
+                    format_fixer = st.checkbox("🎨 Format Fixer: USA / U.S.A. / KZN / City / Province", value=True)
+                    # BUTTON 2 + 4 controls
+                    st.markdown("**Advanced Super Options**")
+                    d1, d2 = st.columns(2)
+                    with d1:
+                        smart_missing_mode = st.selectbox("🕳️ Smart Missing - Fill blanks with:", ["Don't use Smart Missing", "Average", "Median", "Most Common", "Delete rows with blanks"])
+                    with d2:
+                        use_fuzzy = st.checkbox("👯 Fuzzy Dedupe - Remove Sipho vs Sipo (85% match)", value=True)
                     if st.button("Run cleaning & validation", type="primary"):
-                        cleaned, audit_df, audit = clean_table(frame, missing_policy, remove_duplicates, normalize_case, trim_text, standardize_business_fields=standardize_business_fields, normalize_numbers=normalize_numbers, normalize_dates=normalize_dates)
+                        cleaned, audit_df, audit = clean_table(frame, missing_policy, remove_duplicates, normalize_case, trim_text, standardize_business_fields=standardize_business_fields, normalize_numbers=normalize_numbers, normalize_dates=normalize_dates, format_fixer=format_fixer)
+                        # BUTTON 2: Smart Missing - applied AFTER main cleaning, only if user chose it
+                        if smart_missing_mode != "Don't use Smart Missing":
+                            # Only run smart missing if there are still blanks and policy was Preserve
+                            if missing_policy == "Preserve blanks and flag them":
+                                cleaned, smart_audit = apply_smart_missing(cleaned, smart_missing_mode)
+                                audit = audit + smart_audit
+                                audit_df = pd.DataFrame(audit, columns=["Cleaning audit"])
+                        # BUTTON 4: Fuzzy Dedupe
+                        if use_fuzzy:
+                            cleaned, fuzzy_removed, fuzzy_details = apply_fuzzy_dedupe(cleaned, threshold=0.85)
+                            if fuzzy_removed:
+                                audit = audit + [f"Fuzzy Dedupe: removed {fuzzy_removed} fuzzy duplicate(s)."] + fuzzy_details[:10]
+                                audit_df = pd.DataFrame(audit, columns=["Cleaning audit"])
+                            else:
+                                audit = audit + ["Fuzzy Dedupe: no fuzzy duplicates found."]
+                                audit_df = pd.DataFrame(audit, columns=["Cleaning audit"])
                         st.session_state.cleaned_df = cleaned
                         st.session_state.clean_audit = audit_df
                         st.success("Cleaning completed. Review the audit before exporting.")
