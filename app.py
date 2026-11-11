@@ -1015,20 +1015,34 @@ def auth_pages():
         st.markdown("- **Data cleaning:** whitespace, blank values, duplicates and validation flags.\n- **PDF workspace:** render the original page, click text and replace it.\n- **Exports:** download cleaned CSV and Excel files.\n- **Safer accounts:** salted password hashing and email OTP verification.")
         st.info("For production, configure persistent database storage and email secrets before inviting customers.")
     with right:
+        account_type_choice = st.radio(
+            "Choose your workspace",
+            ["Individual", "Business"],
+            horizontal=True,
+            key="auth_account_type",
+        )
+        business_size_choice = ""
+        if account_type_choice == "Business":
+            business_size_choice = st.selectbox(
+                "Business size",
+                ["Small Business", "Big Company"],
+                key="auth_business_size",
+            )
         default_mode = 1 if st.session_state.pending_signup else (0 if st.session_state.auth["page"] == "signin" else 1)
         mode = st.radio("Account", ["Sign in", "Create account"], horizontal=True, index=default_mode)
         if mode == "Create account":
             with st.form("signup_form"):
                 name = st.text_input("Full name")
-                company = st.text_input("Business / team")
+                company_label = "Business / team name" if account_type_choice == "Business" else "Workspace name (optional)"
+                company = st.text_input(company_label)
                 email = st.text_input("Email address")
                 password = st.text_input("Password", type="password")
                 confirm = st.text_input("Confirm password", type="password")
                 submit = st.form_submit_button("Create account & send OTP", type="primary", use_container_width=True)
             if submit:
                 email = email.strip().lower()
-                if not name.strip() or not company.strip() or not valid_email(email):
-                    st.error("Enter your name, business and a valid email address.")
+                if not name.strip() or (account_type_choice == "Business" and not company.strip()) or not valid_email(email):
+                    st.error("Enter your name, a business name for Business accounts, and a valid email address.")
                 elif email in users:
                     st.error("An account with this email already exists.")
                 elif password != confirm:
@@ -1041,7 +1055,18 @@ def auth_pages():
                     if not sent:
                         st.error("OTP email could not be sent. Configure EMAIL_USER and EMAIL_PASS in Streamlit Secrets, then try again. No account was created.")
                     else:
-                        st.session_state.pending_signup = {"name": name.strip(), "company": company.strip(), "email": email, "password_hash": password_hash(password), "otp_hash": hashlib.sha256(code.encode()).hexdigest(), "created_at": time.time(), "attempts": 0}
+                        workspace_name = company.strip() or f"{name.strip()}'s Workspace"
+                        st.session_state.pending_signup = {
+                            "name": name.strip(),
+                            "company": workspace_name,
+                            "email": email,
+                            "account_type": account_type_choice,
+                            "business_size": business_size_choice if account_type_choice == "Business" else "",
+                            "password_hash": password_hash(password),
+                            "otp_hash": hashlib.sha256(code.encode()).hexdigest(),
+                            "created_at": time.time(),
+                            "attempts": 0,
+                        }
                         st.success("Verification code sent. It expires in 10 minutes.")
                         st.rerun()
             pending = st.session_state.pending_signup
@@ -1064,7 +1089,18 @@ def auth_pages():
                     elif not hmac.compare_digest(expected, supplied):
                         st.error("Incorrect code.")
                     else:
-                        users[pending["email"]] = {"name": pending["name"], "company": pending["company"], "password": pending["password_hash"], "verified": True, "created_at": now_utc().isoformat(), "paid_until": (now_utc() + timedelta(days=1)).isoformat(), "plan": "trial"}
+                        users[pending["email"]] = {
+                            "name": pending["name"],
+                            "company": pending["company"],
+                            "account_type": pending.get("account_type", "Business"),
+                            "business_size": pending.get("business_size", ""),
+                            "role": "owner",
+                            "password": pending["password_hash"],
+                            "verified": True,
+                            "created_at": now_utc().isoformat(),
+                            "paid_until": (now_utc() + timedelta(days=1)).isoformat(),
+                            "plan": "trial",
+                        }
                         write_users(users)
                         st.session_state.pending_signup = None
                         st.session_state.auth = {"logged_in": True, "user": pending["email"], "page": "signin"}
@@ -1079,6 +1115,8 @@ def auth_pages():
                 record = users.get(email)
                 if not record or not verify_password(password, record.get("password", "")):
                     st.error("Email or password is incorrect.")
+                elif str(record.get("account_type", "Business")).title() != account_type_choice:
+                    st.error(f"This email belongs to a {record.get('account_type', 'Business')} workspace. Select the matching workspace type above.")
                 elif not record.get("verified"):
                     st.error("This account has not completed email verification.")
                 else:
@@ -1090,11 +1128,46 @@ def auth_pages():
 
 def workspace(email: str):
     user = users.get(email, {})
+    account_type = str(user.get("account_type", "Business")).title()
+    business_size = user.get("business_size", "")
+    if account_type == "Individual":
+        st.markdown("""
+        <style>
+        .stApp { background:linear-gradient(145deg,#f7fff9 0%,#eaf8ef 58%,#ffffff 100%); color:#173328; }
+        .stApp h1,.stApp h2,.stApp h3,.stApp p,.stApp label,.stApp li,.stApp span { color:#173328 !important; }
+        [data-testid="stSidebar"] { background:#e4f5e9; border-right:1px solid #b8dfc5; }
+        [data-testid="stMetric"] { background:#ffffff; border:1px solid #c8e6d1; }
+        [data-testid="stMetricLabel"] { color:#315b43 !important; }
+        [data-testid="stMetricValue"] { color:#14532d !important; }
+        .hero { background:linear-gradient(115deg,#d8f4e1,#f5fff7); border:1px solid #b8dfc5; }
+        .hero h1,.hero p { color:#173328 !important; }
+        .panel { background:#ffffff; border:1px solid #c8e6d1; color:#173328 !important; }
+        div[data-testid="stTabs"] button { color:#14532d !important; }
+        </style>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <style>
+        .stApp { background:radial-gradient(ellipse at 15% 0%,#252015 0%,#111111 48%,#050505 100%); color:#f5edda; }
+        .stApp h1,.stApp h2,.stApp h3,.stApp p,.stApp label,.stApp li,.stApp span { color:#f5edda !important; }
+        [data-testid="stSidebar"] { background:#11100d; border-right:1px solid #57451e; }
+        [data-testid="stMetric"] { background:linear-gradient(145deg,#292315,#15130e); border:1px solid #6d5725; }
+        [data-testid="stMetricLabel"] { color:#e5d5a5 !important; }
+        [data-testid="stMetricValue"] { color:#f4d477 !important; }
+        .hero { background:linear-gradient(115deg,#302716,#17140e); border:1px solid #8a6c2e; }
+        .hero-kicker { color:#f4d477 !important; }
+        .hero h1,.hero p { color:#fff4d6 !important; }
+        .panel { background:#17140e; border:1px solid #6d5725; color:#f5edda !important; }
+        .stButton>button[kind="primary"] { background:linear-gradient(90deg,#c49a36,#f4d477); color:#17130a !important; }
+        div[data-testid="stTabs"] button { color:#f4d477 !important; }
+        </style>
+        """, unsafe_allow_html=True)
     with st.sidebar:
         st.markdown("## 🧹 CleanData LAI")
-        st.caption("Professional workspace")
+        st.caption(f"{account_type} workspace" + (f" · {business_size}" if business_size else ""))
         st.write(f"**{user.get('name', 'User')}**")
         st.caption(user.get("company", ""))
+        st.caption(f"Account type: {account_type}" + (f" · {business_size}" if business_size else ""))
         st.divider()
         st.write(f"Account: `{email}`")
         expiry_text = user.get("paid_until", "")
@@ -1110,9 +1183,12 @@ def workspace(email: str):
             st.session_state.original_df = None
             st.rerun()
     hero()
-    tabs = st.tabs(["Overview", "Data cleaning", "PDF editor", "🔄 File Converter", "📦 PDF Toolkit", "⏰ Daily Planner", "🧾 Quick Invoice", "Plans & account"])
+    overview_title = "Individual dashboard" if account_type == "Individual" else f"Business dashboard · {business_size or 'Business'}"
+    tabs = st.tabs([overview_title, "Data cleaning", "PDF editor", "🔄 File Converter", "📦 PDF Toolkit", "⏰ Daily Planner", "🧾 Quick Invoice", "Plans & account"])
     with tabs[0]:
-        st.subheader("Workspace overview")
+        st.subheader(overview_title)
+        if account_type == "Business":
+            st.caption("Business workspace. Business size is recorded at registration; staff permissions and company-wide reporting require a separate secure team backend.")
         c1, c2, c3 = st.columns(3)
         c1.metric("Account status", "Verified" if user.get("verified") else "Unverified")
         c2.metric("Plan", user.get("plan", "Trial"))
@@ -1498,11 +1574,11 @@ def workspace(email: str):
         with ic1:
             biz_name = st.text_input("Your Business Name", value=user.get("company", "") or "CleanData LAI", key="inv_biz")
             biz_email = st.text_input("Your Email", value=email, key="inv_biz_email")
-            biz_phone = st.text_input("Your Phone", value="078 123 4567", key="inv_biz_phone")
-            banking = st.text_input("Banking Details", value="Capitec - Acc: 1234567890 - Branch: 470010", key="inv_banking")
+            biz_phone = st.text_input("Your Phone", value="", key="inv_biz_phone")
+            banking = st.text_input("Banking Details", value="", key="inv_banking")
         with ic2:
-            client_name = st.text_input("Client Name", value="Thandi Nene", key="inv_client")
-            client_email = st.text_input("Client Email", value="thandi@gmail.com", key="inv_client_email")
+            client_name = st.text_input("Client Name", value="", key="inv_client")
+            client_email = st.text_input("Client Email", value="", key="inv_client_email")
             inv_no = st.text_input("Invoice No", value=f"INV-{datetime.now().strftime('%Y%m%d')}-001", key="inv_no")
             inv_date = st.text_input("Invoice Date (DD-MM-YYYY)", value=datetime.now().strftime("%d-%m-%Y"), key="inv_date")
         st.markdown("**Invoice Items**")
