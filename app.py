@@ -25,18 +25,12 @@ try:
 except Exception:
     HAS_IMAGE_COORDINATES = False
 
-st.set_page_config(
-    page_title="CleanData LAI | Workspace",
-    page_icon="🧹",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="CleanData LAI | Workspace", page_icon="🧹", layout="wide", initial_sidebar_state="expanded")
 
 APP_NAME = "CleanData LAI"
 DATA_DIR = Path(os.getenv("CLEANDATA_DATA_DIR", ".cleandata_data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 USERS_FILE = DATA_DIR / "users.json"
-# FIX 1: 200MB per file (was 25MB)
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "200"))
 OTP_MINUTES = 10
 
@@ -46,220 +40,46 @@ PLANS = {
     "1month": {"name": "1 Month Pro", "price": "399.00", "days": 30},
 }
 
-# ---------------------------- VISUAL DESIGN - FIXED FOR VISIBILITY ----------------------------
+# ---------------------------- VISUAL DESIGN - FIXED ----------------------------
 
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
-
-:root {
-    --ink:#eaf0ff;
-    --muted:#9aa8c4;
-    --panel:#111b31;
-    --line:#263653;
-    --accent:#70e1b2;
-}
-
-html, body, [class*="css"] {
-    font-family:'DM Sans',sans-serif;
-}
-
-.stApp {
-    background:radial-gradient(
-        ellipse at 12% 0%,
-        #192b4b 0%,
-        #0b1222 48%,
-        #080e1a 100%
-    );
-    color:#edf3ff;
-}
-
-h1,h2,h3 {
-    font-family:'Manrope',sans-serif;
-    letter-spacing:-.035em;
-    color:#f7f9ff !important;
-}
-
-[data-testid="stSidebar"] {
-    background:#0b1426;
-    border-right:1px solid #263653;
-}
-
-[data-testid="stMetric"] {
-    background:linear-gradient(145deg,#172641,#101a2e);
-    border:1px solid #2a3c5b;
-    padding:16px;
-    border-radius:16px;
-}
-
-[data-testid="stMetricLabel"] {
-    color:#d5e0f1 !important;
-}
-
-[data-testid="stMetricValue"] {
-    color:#ffffff !important;
-}
-
-.stButton>button,
-.stDownloadButton>button {
-    border-radius:11px;
-    font-weight:700;
-    min-height:2.7rem;
-    color:#102033 !important;
-    background:#dff8ee;
-    border:1px solid #70d9b0;
-}
-
-.stButton>button[kind="primary"] {
-    background:linear-gradient(90deg,#35bd91,#70e1b2);
-    color:#071b18 !important;
-    border:0;
-}
-
-div[data-testid="stForm"] {
-    background:#111b31;
-    padding:22px;
-    border:1px solid #263653;
-    border-radius:18px;
-}
-
-/* FIX 3: File uploader - keep text visible */
-div[data-testid="stFileUploader"] {
-    background:#111b31;
-    border:1px dashed #3b5278;
-    border-radius:14px;
-    padding:12px;
-}
-div[data-testid="stFileUploader"] section,
-div[data-testid="stFileUploader"] span,
-div[data-testid="stFileUploader"] small,
-div[data-testid="stFileUploader"] p,
-div[data-testid="stFileUploader"] div {
-    color:#edf3ff !important;
-}
-div[data-testid="stFileUploader"] button {
-    color:#102033 !important;
-    background:#dff8ee !important;
-}
-
-.block-container {
-    padding-top:2rem;
-    padding-bottom:3rem;
-    max-width:1500px;
-}
-
-small,.muted {
-    color:#9aa8c4;
-}
-
-.hero {
-    padding:28px;
-    border-radius:22px;
-    border:1px solid #2b4164;
-    background:linear-gradient(
-        115deg,
-        rgba(31,60,94,.95),
-        rgba(15,28,49,.96)
-    );
-    margin-bottom:20px;
-}
-
-.hero-kicker {
-    color:#70e1b2;
-    font-size:.78rem;
-    text-transform:uppercase;
-    letter-spacing:.16em;
-    font-weight:800;
-}
-
-.hero h1 {
-    font-size:2.3rem;
-    margin:.35rem 0;
-    color:#f7f9ff;
-}
-
-.hero p {
-    color:#e1eaf8 !important;
-    max-width:780px;
-}
-
-.panel {
-    background:#111b31;
-    border:1px solid #263653;
-    border-radius:16px;
-    padding:18px;
-    color:#f3f7ff !important;
-}
-
-div[data-testid="stTabs"] button {
-    font-weight:700;
-    color:#edf3ff !important;
-}
-
-hr {
-    border-color:#263653;
-}
-
-/* FIX 3: Do NOT force white text on white/light elements */
-.stApp p, .stApp label, .stApp li, .stApp span {
-    color:#edf3ff;
-}
-.stApp [data-testid="stWidgetLabel"] p,
-.stApp [data-testid="stCaptionContainer"] p {
-    color:#d0dbed !important;
-}
-
-/* Inputs - dark text on light background */
-.stApp input,
-.stApp textarea,
-.stApp [data-baseweb="select"] > div,
-.stApp [data-baseweb="input"] > div {
-    background:#f7f9fc !important;
-    color:#172033 !important;
-    border-color:#9aabc2 !important;
-}
-.stApp input::placeholder,
-.stApp textarea::placeholder {
-    color:#53627a !important;
-    opacity:1;
-}
-.stApp [data-baseweb="select"] *,
-.stApp [role="option"] {
-    color:#172033 !important;
-    background:#ffffff !important;
-}
-
-/* Dataframe - dark text on white */
-.stApp [data-testid="stDataFrame"] {
-    background:#ffffff;
-    border-radius:12px;
-}
-.stApp [data-testid="stDataFrame"] * {
-    color:#172033 !important;
-}
-
-/* Alerts - keep Streamlit default readable colors, don't force inherit */
-.stApp .stAlert {
-    color:#172033 !important;
-}
-.stApp .stAlert p, .stApp .stAlert div, .stApp .stAlert span, .stApp .stAlert li {
-    color:inherit !important;
-}
-
-.stApp [data-testid="stExpander"] summary {
-    color:#edf3ff !important;
-}
-.stApp [data-testid="stSidebar"] p,
-.stApp [data-testid="stSidebar"] label,
-.stApp [data-testid="stSidebar"] span {
-    color:#edf3ff !important;
-}
-
-/* Number input, checkbox, radio labels visible */
-.stApp [data-testid="stCheckbox"] label,
-.stApp [data-testid="stRadio"] label {
-    color:#edf3ff !important;
-}
+:root { --ink:#eaf0ff; --muted:#9aa8c4; --panel:#111b31; --line:#263653; --accent:#70e1b2; }
+html, body, [class*="css"] { font-family:'DM Sans',sans-serif; }
+.stApp { background:radial-gradient(ellipse at 12% 0%, #192b4b 0%, #0b1222 48%, #080e1a 100%); color:#edf3ff; }
+h1,h2,h3 { font-family:'Manrope',sans-serif; letter-spacing:-.035em; color:#f7f9ff !important; }
+[data-testid="stSidebar"] { background:#0b1426; border-right:1px solid #263653; }
+[data-testid="stMetric"] { background:linear-gradient(145deg,#172641,#101a2e); border:1px solid #2a3c5b; padding:16px; border-radius:16px; }
+[data-testid="stMetricLabel"] { color:#d5e0f1 !important; }
+[data-testid="stMetricValue"] { color:#ffffff !important; }
+.stButton>button, .stDownloadButton>button { border-radius:11px; font-weight:700; min-height:2.7rem; color:#102033 !important; background:#dff8ee; border:1px solid #70d9b0; }
+.stButton>button[kind="primary"] { background:linear-gradient(90deg,#35bd91,#70e1b2); color:#071b18 !important; border:0; }
+div[data-testid="stForm"] { background:#111b31; padding:22px; border:1px solid #263653; border-radius:18px; }
+div[data-testid="stFileUploader"] { background:#111b31; border:1px dashed #3b5278; border-radius:14px; padding:12px; }
+div[data-testid="stFileUploader"] section, div[data-testid="stFileUploader"] span, div[data-testid="stFileUploader"] small, div[data-testid="stFileUploader"] p, div[data-testid="stFileUploader"] div { color:#edf3ff !important; }
+div[data-testid="stFileUploader"] button { color:#102033 !important; background:#dff8ee !important; }
+.block-container { padding-top:2rem; padding-bottom:3rem; max-width:1500px; }
+small,.muted { color:#9aa8c4; }
+.hero { padding:28px; border-radius:22px; border:1px solid #2b4164; background:linear-gradient(115deg, rgba(31,60,94,.95), rgba(15,28,49,.96)); margin-bottom:20px; }
+.hero-kicker { color:#70e1b2; font-size:.78rem; text-transform:uppercase; letter-spacing:.16em; font-weight:800; }
+.hero h1 { font-size:2.3rem; margin:.35rem 0; color:#f7f9ff; }
+.hero p { color:#e1eaf8 !important; max-width:780px; }
+.panel { background:#111b31; border:1px solid #263653; border-radius:16px; padding:18px; color:#f3f7ff !important; }
+div[data-testid="stTabs"] button { font-weight:700; color:#edf3ff !important; }
+hr { border-color:#263653; }
+.stApp p, .stApp label, .stApp li, .stApp span { color:#edf3ff; }
+.stApp [data-testid="stWidgetLabel"] p, .stApp [data-testid="stCaptionContainer"] p { color:#d0dbed !important; }
+.stApp input, .stApp textarea, .stApp [data-baseweb="select"] > div, .stApp [data-baseweb="input"] > div { background:#f7f9fc !important; color:#172033 !important; border-color:#9aabc2 !important; }
+.stApp input::placeholder, .stApp textarea::placeholder { color:#53627a !important; opacity:1; }
+.stApp [data-baseweb="select"] *, .stApp [role="option"] { color:#172033 !important; background:#ffffff !important; }
+.stApp [data-testid="stDataFrame"] { background:#ffffff; border-radius:12px; }
+.stApp [data-testid="stDataFrame"] * { color:#172033 !important; }
+.stApp .stAlert { color:#172033 !important; }
+.stApp .stAlert p, .stApp .stAlert div, .stApp .stAlert span, .stApp .stAlert li { color:inherit !important; }
+.stApp [data-testid="stExpander"] summary { color:#edf3ff !important; }
+.stApp [data-testid="stSidebar"] p, .stApp [data-testid="stSidebar"] label, .stApp [data-testid="stSidebar"] span { color:#edf3ff !important; }
+.stApp [data-testid="stCheckbox"] label, .stApp [data-testid="stRadio"] label { color:#edf3ff !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -276,10 +96,7 @@ def read_users() -> dict:
             value = json.load(f)
         return value if isinstance(value, dict) else {}
     except (OSError, json.JSONDecodeError):
-        st.error(
-            "The local account database could not be read. "
-            "Do not overwrite it until it has been backed up."
-        )
+        st.error("The local account database could not be read. Do not overwrite it until it has been backed up.")
         return {}
 
 def write_users(users: dict) -> None:
@@ -314,11 +131,7 @@ def send_otp(email: str, code: str) -> bool:
     mail_pass = st.secrets.get("EMAIL_PASS", os.getenv("EMAIL_PASS", ""))
     if not mail_user or not mail_pass:
         return False
-    msg = MIMEText(
-        f"Your CleanData LAI verification code is {code}.\n"
-        f"It expires in {OTP_MINUTES} minutes. "
-        "If you did not request it, ignore this email."
-    )
+    msg = MIMEText(f"Your CleanData LAI verification code is {code}.\nIt expires in {OTP_MINUTES} minutes. If you did not request it, ignore this email.")
     msg["Subject"] = "Your CleanData LAI verification code"
     msg["From"] = mail_user
     msg["To"] = email
@@ -331,21 +144,13 @@ def send_otp(email: str, code: str) -> bool:
         return False
 
 def password_is_strong(pwd: str) -> bool:
-    return (
-        len(pwd) >= 10
-        and any(c.isalpha() for c in pwd)
-        and any(c.isdigit() for c in pwd)
-        and any(not c.isalnum() for c in pwd)
-    )
+    return len(pwd) >= 10 and any(c.isalpha() for c in pwd) and any(c.isdigit() for c in pwd) and any(not c.isalnum() for c in pwd)
 
 # ---------------------------- DATA CLEANING ENGINE ----------------------------
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     result = df.copy()
-    result.columns = [
-        re.sub(r"\s+", " ", str(c)).strip() or f"Unnamed_{i+1}"
-        for i, c in enumerate(result.columns)
-    ]
+    result.columns = [re.sub(r"\s+", " ", str(c)).strip() or f"Unnamed_{i+1}" for i, c in enumerate(result.columns)]
     seen, names = {}, []
     for name in result.columns:
         seen[name] = seen.get(name, 0) + 1
@@ -374,83 +179,54 @@ def load_table(upload) -> pd.DataFrame:
         raise ValueError("Choose a CSV or Excel file.")
     if frame.empty:
         raise ValueError("The uploaded file contains no data rows.")
-    # FIX 1: Allow bigger files - 200MB limit, up to 1M rows
     if len(frame) > 1_000_000 or len(frame.columns) > 300:
         raise ValueError("This file is larger than the current workspace limit.")
     return frame.fillna("")
 
 def _normalise_header(name: str) -> str:
-    """Correct common header typos while preserving unknown labels."""
     raw = re.sub(r"\s+", " ", str(name)).strip()
     key = re.sub(r"[^a-z0-9]", "", raw.lower())
-    # FIX: keys must be stripped version (no spaces) to match `key`
     aliases = {
-        "separtment": "Department",
-        "departmant": "Department",
-        "departement": "Department",
-        "deparment": "Department",
-        "deptartment": "Department",
-        "dept": "Department",
-        "custmerid": "Customer ID",
-        "customerid": "Customer ID",
-        "clientid": "Client ID",
-        "phonenumber": "Phone Number",
-        "cellphone": "Phone Number",
-        "email": "Email",
-        "e-mail": "Email",
+        "separtment": "Department", "departmant": "Department", "departement": "Department",
+        "deparment": "Department", "deptartment": "Department", "dept": "Department",
+        "custmerid": "Customer ID", "customerid": "Customer ID", "clientid": "Client ID",
+        "phonenumber": "Phone Number", "cellphone": "Phone Number", "phone": "Phone",
+        "email": "Email", "amount": "Amount", "customername": "Customer Name",
     }
-    # also handle "e mail" -> key becomes "email"
     return aliases.get(key, raw)
 
-# ---------------------------- FIX 2: R / CURRENCY - FULL REWRITE ----------------------------
-
-def _clean_currency(value: str) -> str:
+# ===== FIX 1: AMOUNT / R - ALWAYS R IN AMOUNT COLUMN =====
+def _clean_currency(value: str, force_r: bool = False) -> str:
     """
-    FIXED: Only touch REAL money values.
-    - 'R 1 200,50' -> 'R1,200.50'
-    - 'R1200' -> 'R1,200.00'
-    - '1,200.00' -> '1,200.00'
-    - '1200' -> '1,200.00' (only when column is money column)
-    - 'R&D', 'Region', 'R  ' , 'N/A' -> returned UNCHANGED
+    R100 -> R100.00
+    100 -> R100.00 if force_r=True (Amount column), else 100.00
+    R 1 200,50 -> R1,200.50
+    250 -> R250.00 (in Amount column)
+    R&D / Region -> unchanged
     """
     s = str(value).replace("\u00a0", " ").strip()
     if not s:
         return ""
-    # Don't touch words - must be ONLY currency + number
-    # Allowed: optional R, optional minus, digits with spaces/commas/dots, optional .xx
-    # Reject if it contains any letters other than leading R
+    # Don't touch words
     if re.search(r"[A-Za-z]", s):
-        # Only allow a single leading R (with optional space)
         if not re.fullmatch(r"(?i)R\s*[+-]?[\d\s,\.]+", s):
-            return s  # e.g. R&D, Region, Ref123 -> leave alone
-    # Must contain at least one digit
+            return s
     if not re.search(r"\d", s):
-        return s  # e.g. just "R" -> leave alone
-
-    # Extract R prefix
+        return s
     has_currency = bool(re.match(r"(?i)^R\s*", s))
-    # Remove leading R and spaces
     number_part = re.sub(r"(?i)^R\s*", "", s).strip()
-    # Handle negative: -R100 or R-100
     is_negative = False
     if number_part.startswith("-"):
         is_negative = True
         number_part = number_part[1:].strip()
     elif number_part.startswith("+"):
         number_part = number_part[1:].strip()
-
-    # If after stripping R we have no valid number chars, return original
     if not re.fullmatch(r"[\d\s,\.]+", number_part):
         return s
-
-    # SA format handling:
-    # 1 200,50 -> 1200.50 | 1,200.50 -> 1200.50 | 1,200 -> 1200 | 1200,50 -> 1200.50
     num = number_part.replace(" ", "")
     if "," in num and "." in num:
-        # 1,200.50 -> remove commas
         num = num.replace(",", "")
     elif "," in num:
-        # Only commas: last comma is decimal if 1-2 digits after it
         if re.search(r",\d{1,2}$", num):
             num = num.replace(",", ".")
         else:
@@ -461,56 +237,62 @@ def _clean_currency(value: str) -> str:
         return s
     if is_negative:
         amount = -amount
-    formatted = f"{amount:,.2f}"
-    # If original had R, keep R. If not, return just number (caller decides)
-    # Fix: never return "R-0.00" weirdness, keep clean
-    if has_currency:
-        # Keep negative sign AFTER R: R-1,200.00 is clearer as -R1,200.00
+    # FIX: In Amount / Price / Total columns, ALWAYS show R
+    if has_currency or force_r:
         if amount < 0:
             return f"-R{abs(amount):,.2f}"
-        return f"R{formatted}"
-    return formatted
+        return f"R{amount:,.2f}"
+    return f"{amount:,.2f}"
+
+# ===== FIX 2: PHONE - NEW FUNCTION =====
+def _clean_phone(value: str) -> str:
+    """
+    078-123-4567 -> 0781234567
+    078 123 4567 -> 0781234567
+    (078) 123-4567 -> 0781234567
+    +27 78 123 4567 -> 0781234567
+    27781234567 -> 0781234567
+    0781234567 -> 0781234567 (already clean)
+    Invalid -> return original trimmed (don't guess)
+    """
+    s = str(value).strip()
+    if not s:
+        return ""
+    # Keep only digits and leading +
+    cleaned = re.sub(r"[^\d+]", "", s)
+    if not cleaned:
+        return s
+    # +27 -> 0
+    if cleaned.startswith("+27"):
+        cleaned = "0" + cleaned[3:]
+    elif cleaned.startswith("27") and len(cleaned) == 11:
+        cleaned = "0" + cleaned[2:]
+    # Must be 10 digits starting with 0 for SA mobile
+    if re.fullmatch(r"0\d{9}", cleaned):
+        return cleaned
+    # If it's 9 digits missing 0, add 0? NO - don't guess, return original
+    return s
 
 def _normalise_department(value: str) -> str:
     s = re.sub(r"\s+", " ", str(value)).strip()
     key = re.sub(r"[^a-z]", "", s.lower())
     known = {
-        "sales": "Sales",
-        "sale": "Sales",
-        "saless": "Sales",
-        "hr": "Human Resources",
-        "humanresources": "Human Resources",
-        "finance": "Finance",
-        "financial": "Finance",
-        "it": "IT",
-        "informationtechnology": "IT",
-        "marketing": "Marketing",
-        "operations": "Operations",
-        "admin": "Administration",
-        "administration": "Administration",
-        "support": "Support",
+        "sales": "Sales", "sale": "Sales", "saless": "Sales",
+        "hr": "Human Resources", "humanresources": "Human Resources",
+        "finance": "Finance", "financial": "Finance", "it": "IT",
+        "informationtechnology": "IT", "marketing": "Marketing",
+        "operations": "Operations", "admin": "Administration",
+        "administration": "Administration", "support": "Support",
         "customerservice": "Customer Service",
     }
     return known.get(key, s.title() if s else "")
 
-def clean_table(
-    source: pd.DataFrame,
-    missing_policy: str,
-    remove_duplicates: bool,
-    normalize_case: bool,
-    trim_text: bool,
-    standardize_business_fields: bool = True,
-    normalize_numbers: bool = True,
-) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-    """Clean common business-data issues and log changes."""
+def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bool, normalize_case: bool, trim_text: bool, standardize_business_fields: bool = True, normalize_numbers: bool = True) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     df = normalize_columns(source.copy())
     audit: list[str] = []
     before_rows = len(df)
     old_columns = list(df.columns)
-    new_columns = [
-        _normalise_header(c) if standardize_business_fields else c
-        for c in old_columns
-    ]
+    new_columns = [_normalise_header(c) if standardize_business_fields else c for c in old_columns]
     counts, unique_columns = {}, []
     for col in new_columns:
         counts[col] = counts.get(col, 0) + 1
@@ -529,42 +311,48 @@ def clean_table(
         old = df[col].astype(str)
         new = old.copy()
         if trim_text:
-            new = (
-                new.str.replace(r"[\u00a0\t\r\n]", " ", regex=True)
-                .str.replace(r"[\u200b-\u200f\ufeff]", "", regex=True)
-                .str.replace(r"\s+", " ", regex=True)
-                .str.strip()
-            )
+            new = (new.str.replace(r"[\u00a0\t\r\n]", " ", regex=True)
+                   .str.replace(r"[\u200b-\u200f\ufeff]", "", regex=True)
+                   .str.replace(r"\s+", " ", regex=True)
+                   .str.strip())
         null_mask = new.str.lower().isin(["nan", "none", "null", "n/a", "na"])
         new.loc[null_mask] = ""
-        if col.strip().lower() == "department" and standardize_business_fields:
+        col_lower = col.strip().lower()
+        is_money_col = any(t in col_lower for t in ("amount", "price", "cost", "salary", "revenue", "total", "balance", "payment"))
+        is_phone_col = any(t in col_lower for t in ("phone", "cell", "mobile", "contact"))
+        is_email_col = "email" in col_lower
+
+        if col_lower == "department" and standardize_business_fields:
             new = new.map(_normalise_department)
-        if "email" in col.lower():
+
+        # PHONE - FIX 2
+        if is_phone_col:
+            new = new.map(_clean_phone)
+        # EMAIL
+        elif is_email_col:
             new = new.str.lower().str.strip()
             invalid = new.ne("") & ~new.str.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
             if invalid.any():
                 audit.append(f"{col}: flagged {int(invalid.sum())} invalid email value(s); preserved for review.")
-        elif normalize_case and any(token in col.lower() for token in ("name", "customer", "client")):
-            if not any(token in col.lower() for token in ("id", "code", "number")):
+        # NAME
+        elif normalize_case and any(token in col_lower for token in ("name", "customer", "client")):
+            if not any(token in col_lower for token in ("id", "code", "number")):
                 new = new.str.title()
 
-        # FIX 2: Currency - only apply to money columns, or cells that look like R + number
-        is_money_col = any(t in col.lower() for t in ("amount", "price", "cost", "salary", "revenue", "total", "balance", "payment"))
+        # AMOUNT / R - FIX 1
         if normalize_numbers and is_money_col:
-            # Only clean cells that are empty or look like money, don't touch words
             def _safe_money(v):
                 if v == "":
                     return ""
-                # If cell has letters and is NOT R+number, leave it
                 if re.search(r"[A-Za-z]", v) and not re.fullmatch(r"(?i)R\s*[+-]?[\d\s,\.]+", v.strip()):
                     return v
-                return _clean_currency(v)
+                # force_r=True -> ALWAYS R in Amount column!
+                return _clean_currency(v, force_r=True)
             new = new.map(_safe_money)
-        elif normalize_numbers:
-            # For non-money columns: only fix if it REALLY looks like R + number
+        elif normalize_numbers and not is_phone_col:
             mask = new.str.fullmatch(r"(?i)R\s*[+-]?[\d\s,\.]+", na=False)
             if mask.any():
-                new.loc[mask] = new.loc[mask].map(_clean_currency)
+                new.loc[mask] = new.loc[mask].map(lambda x: _clean_currency(x, force_r=False))
 
         changed = int((old != new).sum())
         if changed:
@@ -582,11 +370,15 @@ def clean_table(
         audit.append("Filled blank cells with 'Not provided' at the user's request.")
     else:
         audit.append(f"Preserved {missing_count} blank cell(s); no missing values were guessed.")
+
+    # ===== FIX 3: DUPLICATES - AFTER all cleaning, so R100 == R100, phone 078-123 == 078123 =====
     if remove_duplicates:
+        # Use exact match AFTER cleaning - now Sipho rows are identical, so they WILL be removed
         duplicate_count = int(df.duplicated().sum())
         if duplicate_count:
             df = df.drop_duplicates().copy()
         audit.append(f"Removed {duplicate_count} exact duplicate row(s).")
+
     audit.insert(0, f"Input rows: {before_rows}; output rows: {len(df)}.")
     audit.append(f"Output columns: {len(df.columns)}.")
     audit.append("Review standardised values before using them in financial, payroll or legal records.")
@@ -634,10 +426,7 @@ def replace_pdf_span(pdf_bytes: bytes, page_number: int, bbox_tuple, replacement
     try:
         page = doc[page_number]
         rect = fitz.Rect(bbox_tuple)
-        rect.x0 -= 0.8
-        rect.y0 -= 0.4
-        rect.x1 += 0.8
-        rect.y1 += 0.8
+        rect.x0 -= 0.8; rect.y0 -= 0.4; rect.x1 += 0.8; rect.y1 += 0.8
         page.add_redact_annot(rect, fill=(1, 1, 1))
         page.apply_redactions(images=0, graphics=0)
         font_size = max(5, min(18, float(rect.height) * 0.78))
@@ -728,7 +517,7 @@ def pdf_merge(pdf_files: list[bytes]) -> bytes:
     finally:
         output.close()
 
-# ---------------------------- PAYFAST CONFIGURATION ----------------------------
+# ---------------------------- PAYFAST ----------------------------
 
 def get_payfast_config():
     try:
@@ -746,19 +535,10 @@ def payfast_checkout(email: str, plan_key: str):
     st.warning("Payment activation must be confirmed by a server-side PayFast ITN validation before access is extended.")
     st.code(f"Merchant: {mid}\nPlan: {plan['name']}\nAmount: R{plan['price']}\nEndpoint: {endpoint}")
 
-# ---------------------------- SESSION MANAGEMENT ----------------------------
+# ---------------------------- SESSION ----------------------------
 
 def init_state():
-    defaults = {
-        "auth": {"logged_in": False, "page": "signin"},
-        "pending_signup": None,
-        "cleaned_df": None,
-        "clean_audit": None,
-        "pdf_bytes": None,
-        "pdf_name": None,
-        "pdf_selected": None,
-        "pdf_page": 0,
-    }
+    defaults = {"auth": {"logged_in": False, "page": "signin"}, "pending_signup": None, "cleaned_df": None, "clean_audit": None, "pdf_bytes": None, "pdf_name": None, "pdf_selected": None, "pdf_page": 0}
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -766,30 +546,15 @@ def init_state():
 init_state()
 users = read_users()
 
-# ---------------------------- MAIN DESIGN ----------------------------
-
 def hero():
-    st.markdown("""
-    <div class="hero">
-      <div class="hero-kicker">Clean workspace · Better decisions</div>
-      <h1>Make messy data make sense.</h1>
-      <p>Clean, validate, review and export business data. Edit existing PDF text directly on the page, with a preview before you download.</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-# ---------------------------- LOGIN AND REGISTRATION ----------------------------
+    st.markdown("""<div class="hero"><div class="hero-kicker">Clean workspace · Better decisions</div><h1>Make messy data make sense.</h1><p>Clean, validate, review and export business data. Edit existing PDF text directly on the page, with a preview before you download.</p></div>""", unsafe_allow_html=True)
 
 def auth_pages():
     hero()
     left, right = st.columns([1.1, 0.9], gap="large")
     with left:
         st.markdown("### Your business data workspace")
-        st.markdown("""
-        - **Data cleaning:** whitespace, blank values, duplicates and validation flags.
-        - **PDF workspace:** render the original page, click text and replace it.
-        - **Exports:** download cleaned CSV and Excel files.
-        - **Safer accounts:** salted password hashing and email OTP verification.
-        """)
+        st.markdown("- **Data cleaning:** whitespace, blank values, duplicates and validation flags.\n- **PDF workspace:** render the original page, click text and replace it.\n- **Exports:** download cleaned CSV and Excel files.\n- **Safer accounts:** salted password hashing and email OTP verification.")
         st.info("For production, configure persistent database storage and email secrets before inviting customers.")
     with right:
         default_mode = 1 if st.session_state.pending_signup else (0 if st.session_state.auth["page"] == "signin" else 1)
@@ -818,12 +583,7 @@ def auth_pages():
                     if not sent:
                         st.error("OTP email could not be sent. Configure EMAIL_USER and EMAIL_PASS in Streamlit Secrets, then try again. No account was created.")
                     else:
-                        st.session_state.pending_signup = {
-                            "name": name.strip(), "company": company.strip(), "email": email,
-                            "password_hash": password_hash(password),
-                            "otp_hash": hashlib.sha256(code.encode()).hexdigest(),
-                            "created_at": time.time(), "attempts": 0,
-                        }
+                        st.session_state.pending_signup = {"name": name.strip(), "company": company.strip(), "email": email, "password_hash": password_hash(password), "otp_hash": hashlib.sha256(code.encode()).hexdigest(), "created_at": time.time(), "attempts": 0}
                         st.success("Verification code sent. It expires in 10 minutes.")
                         st.rerun()
             pending = st.session_state.pending_signup
@@ -846,13 +606,7 @@ def auth_pages():
                     elif not hmac.compare_digest(expected, supplied):
                         st.error("Incorrect code.")
                     else:
-                        users[pending["email"]] = {
-                            "name": pending["name"], "company": pending["company"],
-                            "password": pending["password_hash"], "verified": True,
-                            "created_at": now_utc().isoformat(),
-                            "paid_until": (now_utc() + timedelta(days=1)).isoformat(),
-                            "plan": "trial",
-                        }
+                        users[pending["email"]] = {"name": pending["name"], "company": pending["company"], "password": pending["password_hash"], "verified": True, "created_at": now_utc().isoformat(), "paid_until": (now_utc() + timedelta(days=1)).isoformat(), "plan": "trial"}
                         write_users(users)
                         st.session_state.pending_signup = None
                         st.session_state.auth = {"logged_in": True, "user": pending["email"], "page": "signin"}
@@ -875,8 +629,6 @@ def auth_pages():
                         write_users(users)
                     st.session_state.auth = {"logged_in": True, "user": email, "page": "signin"}
                     st.rerun()
-
-# ---------------------------- LOGGED-IN WORKSPACE ----------------------------
 
 def workspace(email: str):
     user = users.get(email, {})
@@ -1083,8 +835,6 @@ def workspace(email: str):
                 st.write(f"Access duration: {plan['days']} day(s)")
                 payfast_checkout(email, key)
         st.warning("Important: this version deliberately does not activate paid access from a browser return URL. A secure PayFast ITN endpoint must validate the signature, payment status, amount and merchant before extending subscriptions.")
-
-# ---------------------------- APPLICATION ENTRY POINT ----------------------------
 
 if st.session_state.auth.get("logged_in"):
     workspace(st.session_state.auth["user"])
