@@ -229,7 +229,6 @@ def _clean_currency(value: str, force_r: bool = False) -> str:
     return f"{amount:,.2f}"
 
 def _parse_amount_to_float(value: str):
-    """Helper for Smart Missing + Outliers: R1,200.50 -> 1200.5, else None"""
     s = str(value).replace("\u00a0", " ").strip()
     if not s:
         return None
@@ -271,7 +270,6 @@ def _normalise_department(value: str) -> str:
     }
     return known.get(key, s.title() if s else "")
 
-# ===== BUTTON 3: FORMAT FIXER - COUNTRY / CITY =====
 def _normalise_country(value: str) -> str:
     s = re.sub(r"\s+", " ", str(value)).strip()
     if not s:
@@ -286,7 +284,6 @@ def _normalise_country(value: str) -> str:
     }
     if key in mapping:
         return mapping[key]
-    # e.g. U.S.A. -> key usa -> USA, already handled
     return s.title()
 
 def _normalise_city(value: str) -> str:
@@ -307,7 +304,6 @@ def _normalise_city(value: str) -> str:
     return s.title()
 
 def _normalise_region(value: str) -> str:
-    """For Province / Region / State columns"""
     s = re.sub(r"\s+", " ", str(value)).strip()
     if not s:
         return ""
@@ -413,48 +409,35 @@ def _repair_emails(df: pd.DataFrame, audit: list[str]) -> pd.DataFrame:
                     df.at[idx, email_col] = best
                     fixed += 1
     if fixed:
-        audit.append(f"Email: repaired {fixed} email(s) using the correct email from the same person (same Name + Phone). Example: thandi@nene / thandi@nene.com -> thandinene@gmail.com")
+        audit.append(f"Email: repaired {fixed} email(s) using the correct email from the same person (same Name + Phone).")
     return df
 
-# ===== BUTTON 1: AUTO-PROFILE =====
 def build_profile(df: pd.DataFrame) -> pd.DataFrame:
-    """One row per column: blanks, duplicates, unique, sample weird values. Never crashes."""
     rows = []
     total = len(df)
     for col in df.columns:
         series = df[col].astype(str)
         blanks = int((series == "").sum())
         uniques = int(series.nunique())
-        # Sample 3 most common values
         try:
             top = series[series != ""].value_counts().head(3).index.tolist()
             sample = ", ".join([str(x)[:25] for x in top])
         except Exception:
             sample = ""
-        # Guess type
         col_lower = col.lower()
         if any(t in col_lower for t in ("amount", "price", "total", "salary")):
             dtype_guess = "Money (R)"
         elif any(t in col_lower for t in ("phone", "cell")):
             dtype_guess = "Phone"
-        elif any(t in col_lower for t in ("email",)):
+        elif "email" in col_lower:
             dtype_guess = "Email"
         elif any(t in col_lower for t in ("date", "dob", "birth")):
             dtype_guess = "Date (DD-MM-YYYY)"
-        elif any(t in col_lower for t in ("age",)):
+        elif "age" in col_lower:
             dtype_guess = "Age / Number"
         else:
             dtype_guess = "Text"
-        rows.append({
-            "Column": col,
-            "Type Guess": dtype_guess,
-            "Rows": total,
-            "Blank Cells": blanks,
-            "Blank %": f"{(blanks/total*100) if total else 0:.1f}%",
-            "Unique Values": uniques,
-            "Top Values": sample,
-        })
-    # Add overall row
+        rows.append({"Column": col, "Type Guess": dtype_guess, "Rows": total, "Blank Cells": blanks, "Blank %": f"{(blanks/total*100) if total else 0:.1f}%", "Unique Values": uniques, "Top Values": sample})
     try:
         dup_exact = int(df.duplicated().sum())
     except Exception:
@@ -462,15 +445,12 @@ def build_profile(df: pd.DataFrame) -> pd.DataFrame:
     rows.append({"Column": "--- OVERALL ---", "Type Guess": f"Exact duplicates: {dup_exact}", "Rows": total, "Blank Cells": int(df.eq("").sum().sum()), "Blank %": "", "Unique Values": "", "Top Values": f"Columns: {len(df.columns)}"})
     return pd.DataFrame(rows)
 
-# ===== BUTTON 2: SMART MISSING =====
 def apply_smart_missing(df: pd.DataFrame, mode: str) -> tuple[pd.DataFrame, list[str]]:
-    """Fill blanks smartly. mode = Average / Median / Most Common / Delete"""
     df = df.copy()
     audit = []
     if mode == "Delete rows with blanks":
         before = len(df)
         df = df.replace(r"^\s*$", pd.NA, regex=True).dropna().copy()
-        # Convert NA back to "" for consistency
         df = df.fillna("")
         audit.append(f"Smart Missing (Delete): removed {before-len(df)} row(s) with blanks.")
         return df, audit
@@ -482,7 +462,7 @@ def apply_smart_missing(df: pd.DataFrame, mode: str) -> tuple[pd.DataFrame, list
         is_money = any(t in col_lower for t in ("amount", "price", "cost", "salary", "revenue", "total", "balance", "payment"))
         is_age = "age" in col_lower or "birth year" in col_lower
         if is_money:
-            nums = [ _parse_amount_to_float(v) for v in df[col].tolist() ]
+            nums = [_parse_amount_to_float(v) for v in df[col].tolist()]
             nums = [n for n in nums if n is not None]
             if not nums:
                 continue
@@ -491,7 +471,7 @@ def apply_smart_missing(df: pd.DataFrame, mode: str) -> tuple[pd.DataFrame, list
             elif mode == "Median":
                 s_sorted = sorted(nums)
                 fill_val_num = s_sorted[len(s_sorted)//2]
-            else:  # Most Common
+            else:
                 fill_val_num = Counter(nums).most_common(1)[0][0]
             fill_val = f"R{fill_val_num:,.2f}"
             df[col] = df[col].replace("", fill_val)
@@ -517,7 +497,6 @@ def apply_smart_missing(df: pd.DataFrame, mode: str) -> tuple[pd.DataFrame, list
             df[col] = df[col].replace("", fill_val)
             audit.append(f"{col}: filled {int(blanks)} blank(s) with {mode} = {fill_val}")
         else:
-            # Text: Most Common is safest, Average/Median don't make sense for text
             vals = [str(v) for v in df[col].tolist() if str(v).strip() != ""]
             if not vals:
                 continue
@@ -528,12 +507,10 @@ def apply_smart_missing(df: pd.DataFrame, mode: str) -> tuple[pd.DataFrame, list
         audit.append("Smart Missing: no blank cells found.")
     return df, audit
 
-# ===== BUTTON 4: FUZZY DEDUPE =====
 def _names_similar(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
 
 def apply_fuzzy_dedupe(df: pd.DataFrame, threshold: float = 0.85) -> tuple[pd.DataFrame, int, list[str]]:
-    """Remove fuzzy duplicates: same phone + similar name (85%+) + same amount = same person."""
     if len(df) == 0:
         return df, 0, []
     name_col = next((c for c in df.columns if c.lower() in ("customer name", "name", "customer", "client name")), None)
@@ -544,13 +521,10 @@ def apply_fuzzy_dedupe(df: pd.DataFrame, threshold: float = 0.85) -> tuple[pd.Da
     df = df.copy().reset_index(drop=True)
     to_drop = set()
     details = []
-    # Group by phone first - fast, avoids O(n^2) on huge files
-    # If no phone, group by name first letter
     for phone, group in df.groupby(phone_col, dropna=False):
         idxs = group.index.tolist()
         if len(idxs) < 2:
             continue
-        # Compare pairs inside same phone group
         for i in range(len(idxs)):
             for j in range(i+1, len(idxs)):
                 a_idx, b_idx = idxs[i], idxs[j]
@@ -559,7 +533,6 @@ def apply_fuzzy_dedupe(df: pd.DataFrame, threshold: float = 0.85) -> tuple[pd.Da
                 name_a = str(df.at[a_idx, name_col])
                 name_b = str(df.at[b_idx, name_col])
                 sim = _names_similar(name_a, name_b)
-                # Also check amount if present
                 amount_same = True
                 if amount_col:
                     amount_same = str(df.at[a_idx, amount_col]).strip() == str(df.at[b_idx, amount_col]).strip()
@@ -573,9 +546,7 @@ def apply_fuzzy_dedupe(df: pd.DataFrame, threshold: float = 0.85) -> tuple[pd.Da
         df = df.drop(index=list(to_drop)).reset_index(drop=True)
     return df, len(to_drop), details
 
-# ===== BUTTON 5: OUTLIER HUNTER =====
 def find_outliers(df: pd.DataFrame) -> pd.DataFrame:
-    """Return a table of outliers: Row, Column, Value, Reason. Never crashes."""
     out_rows = []
     for idx, row in df.iterrows():
         for col in df.columns:
@@ -583,14 +554,12 @@ def find_outliers(df: pd.DataFrame) -> pd.DataFrame:
             if val == "":
                 continue
             col_lower = col.lower()
-            # Money: negative?
             if any(t in col_lower for t in ("amount", "price", "total", "salary", "revenue", "balance", "payment")):
                 num = _parse_amount_to_float(val)
                 if num is not None and num < 0:
                     out_rows.append({"Row": int(idx)+1, "Column": col, "Value": val, "Reason": "Negative money - possible typo, should it be positive?"})
                 elif num is not None and num > 1000000:
                     out_rows.append({"Row": int(idx)+1, "Column": col, "Value": val, "Reason": "Very large amount > R1,000,000 - check if extra zeros"})
-            # Age: 0-120 only
             if col_lower == "age":
                 try:
                     age = float(val)
@@ -598,7 +567,6 @@ def find_outliers(df: pd.DataFrame) -> pd.DataFrame:
                         out_rows.append({"Row": int(idx)+1, "Column": col, "Value": val, "Reason": "Impossible age - must be 0-120"})
                 except ValueError:
                     pass
-            # Birth Year: 1900-2026 only
             if "birth" in col_lower and "year" in col_lower:
                 try:
                     yr = int(float(val))
@@ -606,7 +574,6 @@ def find_outliers(df: pd.DataFrame) -> pd.DataFrame:
                         out_rows.append({"Row": int(idx)+1, "Column": col, "Value": val, "Reason": "Impossible birth year - e.g. 1850 means 176 years old"})
                 except ValueError:
                     pass
-            # Date of Birth: check year too
             if col_lower in ("date of birth", "dob", "birth date", "date"):
                 m = re.search(r"(\d{4})", val)
                 if m:
@@ -618,9 +585,7 @@ def find_outliers(df: pd.DataFrame) -> pd.DataFrame:
                         pass
     return pd.DataFrame(out_rows)
 
-# ===== BUTTON 6: VALIDATE & LOCK =====
 def build_validation_report(before_df: pd.DataFrame, after_df: pd.DataFrame, audit: list[str]) -> pd.DataFrame:
-    """Before vs After proof. Shows we didn't corrupt good data."""
     try:
         before_rows = len(before_df)
         after_rows = len(after_df)
@@ -678,7 +643,6 @@ def clean_table(source: pd.DataFrame, missing_policy: str, remove_duplicates: bo
         is_date_col = _is_date_column(col, new) if normalize_dates else False
         if col_lower == "department" and standardize_business_fields:
             new = new.map(_normalise_department)
-        # BUTTON 3: FORMAT FIXER
         if format_fixer and is_country_col:
             new = new.map(_normalise_country)
         elif format_fixer and is_city_col:
@@ -770,26 +734,6 @@ def render_pdf_page(doc: fitz.Document, page_number: int, scale: float = 1.5) ->
     page = doc[page_number]
     pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
     return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-def find_text_span(page: fitz.Page, x: float, y: float, radius: float = 22):
-    best = None
-    best_distance = float("inf")
-    data = page.get_text("dict")
-    for block in data.get("blocks", []):
-        for line in block.get("lines", []):
-            for span in line.get("spans", []):
-                text = span.get("text", "").strip()
-                bbox = fitz.Rect(span.get("bbox", (0, 0, 0, 0)))
-                if not text or bbox.is_empty:
-                    continue
-                if bbox.x0 <= x <= bbox.x1 and bbox.y0 <= y <= bbox.y1:
-                    return span
-                cx = (bbox.x0 + bbox.x1) / 2
-                cy = (bbox.y0 + bbox.y1) / 2
-                distance = ((cx-x)**2 + (cy-y)**2)**0.5
-                if distance < best_distance:
-                    best = span
-                    best_distance = distance
-    return best if best_distance <= radius else None
 def replace_pdf_span(pdf_bytes: bytes, page_number: int, bbox_tuple, replacement: str) -> bytes:
     if not replacement.strip():
         raise ValueError("Replacement text cannot be empty.")
@@ -882,6 +826,161 @@ def pdf_merge(pdf_files: list[bytes]) -> bytes:
     finally:
         output.close()
 
+# ---------------------------- NEW: FILE CONVERTER + PDF TOOLKIT + INVOICE ----------------------------
+
+def image_to_pdf_bytes(image_bytes: bytes) -> bytes:
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PDF")
+    return buf.getvalue()
+
+def text_to_pdf_bytes(text: str, title: str = "Document") -> bytes:
+    doc = fitz.open()
+    page = doc.new_page()
+    y = 60
+    page.insert_text((50, y), title, fontsize=18, fontname="helv", color=(0, 0, 0))
+    y += 30
+    for line in text.splitlines():
+        if y > 750:
+            page = doc.new_page()
+            y = 60
+        # Wrap long lines at 95 chars
+        while len(line) > 95:
+            page.insert_text((50, y), line[:95], fontsize=11, fontname="helv")
+            y += 16
+            line = line[95:]
+            if y > 750:
+                page = doc.new_page()
+                y = 60
+        page.insert_text((50, y), line, fontsize=11, fontname="helv")
+        y += 16
+    out = doc.tobytes(garbage=4, deflate=True)
+    doc.close()
+    return out
+
+def pdf_to_text_bytes(pdf_bytes: bytes) -> str:
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    parts = []
+    try:
+        for page in doc:
+            parts.append(page.get_text("text"))
+        return "\n".join(parts)
+    finally:
+        doc.close()
+
+def pdf_compress(pdf_bytes: bytes) -> bytes:
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        return doc.tobytes(garbage=4, deflate=True)
+    finally:
+        doc.close()
+
+def pdf_split(pdf_bytes: bytes, start_page: int, end_page: int) -> bytes:
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        if start_page < 1 or end_page < start_page or end_page > len(doc):
+            raise ValueError(f"Page range must be 1 to {len(doc)}")
+        out = fitz.open()
+        out.insert_pdf(doc, from_page=start_page-1, to_page=end_page-1)
+        result = out.tobytes(garbage=4, deflate=True)
+        out.close()
+        return result
+    finally:
+        doc.close()
+
+def pdf_watermark(pdf_bytes: bytes, text: str) -> bytes:
+    if not text.strip():
+        raise ValueError("Enter watermark text.")
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        for page in doc:
+            rect = page.rect
+            # Diagonal watermark in middle, light grey
+            page.insert_text((rect.width*0.2, rect.height*0.5), text, fontsize=48, fontname="helv", color=(0.85, 0.85, 0.85), rotate=45, overlay=True)
+            page.insert_text((50, 30), text, fontsize=10, fontname="helv", color=(0.6, 0.6, 0.6), overlay=True)
+        return doc.tobytes(garbage=4, deflate=True)
+    finally:
+        doc.close()
+
+def generate_invoice_pdf(business_name: str, business_email: str, business_phone: str, banking: str, client_name: str, client_email: str, invoice_no: str, invoice_date: str, items: list[dict], vat_enabled: bool, vat_rate: float = 15.0, notes: str = "") -> bytes:
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    y = 50
+    page.insert_text((50, y), "INVOICE", fontsize=26, fontname="hebo", color=(0.05, 0.2, 0.25))
+    y += 22
+    page.insert_text((50, y), business_name, fontsize=14, fontname="helv", color=(0, 0, 0))
+    y += 18
+    if business_email:
+        page.insert_text((50, y), f"Email: {business_email}", fontsize=10, fontname="helv")
+        y += 14
+    if business_phone:
+        page.insert_text((50, y), f"Phone: {business_phone}", fontsize=10, fontname="helv")
+        y += 14
+    if banking:
+        page.insert_text((50, y), f"Banking: {banking}", fontsize=10, fontname="helv")
+        y += 14
+    y += 10
+    page.insert_text((50, y), f"Invoice No: {invoice_no}", fontsize=11, fontname="hebo")
+    page.insert_text((350, y), f"Date: {invoice_date}", fontsize=11, fontname="helv")
+    y += 20
+    page.insert_text((50, y), f"Bill To: {client_name}", fontsize=12, fontname="hebo")
+    y += 16
+    if client_email:
+        page.insert_text((50, y), f"Email: {client_email}", fontsize=10, fontname="helv")
+        y += 16
+    y += 10
+    # Table header
+    page.insert_text((50, y), "Description", fontsize=10, fontname="hebo")
+    page.insert_text((280, y), "Qty", fontsize=10, fontname="hebo")
+    page.insert_text((330, y), "Rate", fontsize=10, fontname="hebo")
+    page.insert_text((430, y), "Total", fontsize=10, fontname="hebo")
+    y += 14
+    page.draw_line((50, y), (545, y))
+    y += 16
+    subtotal = 0.0
+    for it in items:
+        desc = str(it.get("desc", ""))[:45]
+        try:
+            qty = float(it.get("qty", 1))
+        except Exception:
+            qty = 1.0
+        try:
+            rate = float(it.get("rate", 0))
+        except Exception:
+            rate = 0.0
+        total = qty * rate
+        subtotal += total
+        page.insert_text((50, y), desc, fontsize=10, fontname="helv")
+        page.insert_text((280, y), f"{qty:g}", fontsize=10, fontname="helv")
+        page.insert_text((330, y), f"R{rate:,.2f}", fontsize=10, fontname="helv")
+        page.insert_text((430, y), f"R{total:,.2f}", fontsize=10, fontname="helv")
+        y += 18
+        if y > 650:
+            page = doc.new_page(width=595, height=842)
+            y = 50
+    y += 10
+    page.draw_line((50, y), (545, y))
+    y += 18
+    vat_amount = subtotal * (vat_rate/100.0) if vat_enabled else 0.0
+    grand = subtotal + vat_amount
+    page.insert_text((330, y), "Subtotal:", fontsize=11, fontname="helv")
+    page.insert_text((430, y), f"R{subtotal:,.2f}", fontsize=11, fontname="helv")
+    y += 18
+    if vat_enabled:
+        page.insert_text((330, y), f"VAT ({vat_rate:.0f}%):", fontsize=11, fontname="helv")
+        page.insert_text((430, y), f"R{vat_amount:,.2f}", fontsize=11, fontname="helv")
+        y += 18
+    page.insert_text((330, y), "TOTAL DUE:", fontsize=13, fontname="hebo")
+    page.insert_text((430, y), f"R{grand:,.2f}", fontsize=13, fontname="hebo")
+    y += 30
+    if notes:
+        page.insert_text((50, y), f"Notes: {notes[:120]}", fontsize=10, fontname="helv")
+        y += 16
+    page.insert_text((50, y), "Thank you for your business! - Generated with CleanData LAI", fontsize=9, fontname="helv", color=(0.4, 0.4, 0.4))
+    out = doc.tobytes(garbage=4, deflate=True)
+    doc.close()
+    return out
+
 def get_payfast_config():
     try:
         cfg = st.secrets["payfast"]
@@ -898,7 +997,7 @@ def payfast_checkout(email: str, plan_key: str):
     st.code(f"Merchant: {mid}\nPlan: {plan['name']}\nAmount: R{plan['price']}\nEndpoint: {endpoint}")
 
 def init_state():
-    defaults = {"auth": {"logged_in": False, "page": "signin"}, "pending_signup": None, "cleaned_df": None, "clean_audit": None, "pdf_bytes": None, "pdf_name": None, "pdf_selected": None, "pdf_page": 0, "original_df": None, "profile_df": None, "outliers_df": None, "validation_df": None}
+    defaults = {"auth": {"logged_in": False, "page": "signin"}, "pending_signup": None, "cleaned_df": None, "clean_audit": None, "pdf_bytes": None, "pdf_name": None, "pdf_selected": None, "pdf_page": 0, "original_df": None, "profile_df": None, "outliers_df": None, "validation_df": None, "daily_tasks": [], "invoice_items": [{"desc": "Data Cleaning Service", "qty": 1, "rate": 250.0}]}
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -1011,14 +1110,14 @@ def workspace(email: str):
             st.session_state.original_df = None
             st.rerun()
     hero()
-    tabs = st.tabs(["Overview", "Data cleaning", "PDF editor", "Plans & account"])
+    tabs = st.tabs(["Overview", "Data cleaning", "PDF editor", "🔄 File Converter", "📦 PDF Toolkit", "⏰ Daily Planner", "🧾 Quick Invoice", "Plans & account"])
     with tabs[0]:
         st.subheader("Workspace overview")
         c1, c2, c3 = st.columns(3)
         c1.metric("Account status", "Verified" if user.get("verified") else "Unverified")
         c2.metric("Plan", user.get("plan", "Trial"))
         c3.metric("Files in this session", int(st.session_state.cleaned_df is not None) + int(st.session_state.pdf_bytes is not None))
-        st.markdown('<div class="panel">**Your workflow**  \nUpload a file → Profile it → Clean it → Check outliers → Validate → Export.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="panel">**Your workflow**  \nUpload → Profile → Clean → Outliers → Validate → Convert → Invoice → Get Paid.</div>', unsafe_allow_html=True)
         st.caption("Usage metrics are session-based in this version; they are not fabricated lifetime totals.")
         st.info("For reliable production hosting, connect persistent storage: Streamlit Community Cloud local files may reset after redeploys or restarts.")
     with tabs[1]:
@@ -1034,8 +1133,6 @@ def workspace(email: str):
                     st.session_state.original_df = frame.copy()
                     st.write("**Original preview**")
                     st.dataframe(frame.head(100), use_container_width=True)
-
-                    # ===== 6 SUPER BUTTONS - ROW 1 =====
                     st.markdown("### ⚡ Super Tools - 1 Click, Seconds Not Hours")
                     b1, b2, b3 = st.columns(3)
                     with b1:
@@ -1051,8 +1148,6 @@ def workspace(email: str):
                                 st.session_state.validation_df = build_validation_report(st.session_state.original_df, st.session_state.cleaned_df, audit_list)
                             else:
                                 st.warning("Run cleaning first, then Validate.")
-
-                    # Show profile / outliers / validation if they exist
                     if st.session_state.get("profile_df") is not None:
                         st.markdown("**🔍 Auto-Profile - Understand your data in 1 second**")
                         st.dataframe(st.session_state.profile_df, use_container_width=True, hide_index=True)
@@ -1062,18 +1157,10 @@ def workspace(email: str):
                             st.success("No outliers found! Your data looks clean.")
                         else:
                             st.dataframe(st.session_state.outliers_df, use_container_width=True, hide_index=True)
-                            if st.button("🗑️ Remove Outlier Rows", key="remove_outliers"):
-                                try:
-                                    rows_to_drop = [int(r)-1 for r in st.session_state.outliers_df["Row"].tolist()]
-                                    # Drop from original preview frame for next cleaning - safe: only if indices valid
-                                    st.success(f"Found {len(rows_to_drop)} outlier row(s). They will be removed on next cleaning - use 'Drop rows with missing values' logic manually, or delete them in Excel. Outliers are flagged, not auto-deleted, to protect good data.")
-                                except Exception:
-                                    st.info("Outliers flagged. Review them before deleting.")
                     if st.session_state.get("validation_df") is not None:
                         st.markdown("**✅ Validate & Lock - BEFORE vs AFTER Proof**")
                         st.dataframe(st.session_state.validation_df, use_container_width=True, hide_index=True)
                         st.success("Locked: This report proves cleaning did not corrupt good data.")
-
                     st.divider()
                     st.markdown("### 🧹 Main Cleaning")
                     a, b, c = st.columns(3)
@@ -1088,7 +1175,6 @@ def workspace(email: str):
                     normalize_numbers = st.checkbox("Normalise currency and numeric amount fields", value=True)
                     normalize_dates = st.checkbox("Normalise dates to DD-MM-YYYY", value=True)
                     format_fixer = st.checkbox("🎨 Format Fixer: USA / U.S.A. / KZN / City / Province", value=True)
-                    # BUTTON 2 + 4 controls
                     st.markdown("**Advanced Super Options**")
                     d1, d2 = st.columns(2)
                     with d1:
@@ -1097,14 +1183,11 @@ def workspace(email: str):
                         use_fuzzy = st.checkbox("👯 Fuzzy Dedupe - Remove Sipho vs Sipo (85% match)", value=True)
                     if st.button("Run cleaning & validation", type="primary"):
                         cleaned, audit_df, audit = clean_table(frame, missing_policy, remove_duplicates, normalize_case, trim_text, standardize_business_fields=standardize_business_fields, normalize_numbers=normalize_numbers, normalize_dates=normalize_dates, format_fixer=format_fixer)
-                        # BUTTON 2: Smart Missing - applied AFTER main cleaning, only if user chose it
                         if smart_missing_mode != "Don't use Smart Missing":
-                            # Only run smart missing if there are still blanks and policy was Preserve
                             if missing_policy == "Preserve blanks and flag them":
                                 cleaned, smart_audit = apply_smart_missing(cleaned, smart_missing_mode)
                                 audit = audit + smart_audit
                                 audit_df = pd.DataFrame(audit, columns=["Cleaning audit"])
-                        # BUTTON 4: Fuzzy Dedupe
                         if use_fuzzy:
                             cleaned, fuzzy_removed, fuzzy_details = apply_fuzzy_dedupe(cleaned, threshold=0.85)
                             if fuzzy_removed:
@@ -1255,7 +1338,212 @@ def workspace(email: str):
                 st.error(f"PDF editor error: {exc}")
         else:
             st.info("Upload a PDF to begin editing.")
+    # ===== NEW TAB 4: FILE CONVERTER =====
     with tabs[3]:
+        st.subheader("🔄 File Converter - Daily Use")
+        st.caption("Convert in seconds: Image to PDF, CSV to Excel, Excel to CSV, PDF to Text, Text to PDF")
+        conv_upload = st.file_uploader("Upload file to convert", type=["png", "jpg", "jpeg", "csv", "xlsx", "xls", "pdf", "txt"], key="conv_upload")
+        if conv_upload:
+            suffix = Path(conv_upload.name).suffix.lower()
+            st.write(f"File: `{conv_upload.name}` ({conv_upload.size/1024:.1f} KB)")
+            if suffix in (".png", ".jpg", ".jpeg"):
+                if st.button("Convert Image → PDF", type="primary"):
+                    try:
+                        out = image_to_pdf_bytes(conv_upload.getvalue())
+                        st.success("Converted!")
+                        st.download_button("Download PDF", out, f"{Path(conv_upload.name).stem}.pdf", "application/pdf")
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+            elif suffix == ".csv":
+                if st.button("Convert CSV → Excel", type="primary"):
+                    try:
+                        df = read_csv_safely(conv_upload)
+                        buf = io.BytesIO()
+                        with pd.ExcelWriter(buf, engine="openpyxl") as w:
+                            df.to_excel(w, index=False)
+                        st.download_button("Download Excel", buf.getvalue(), f"{Path(conv_upload.name).stem}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+            elif suffix in (".xlsx", ".xls"):
+                if st.button("Convert Excel → CSV", type="primary"):
+                    try:
+                        df = pd.read_excel(conv_upload, dtype=str).fillna("")
+                        st.download_button("Download CSV", df.to_csv(index=False).encode("utf-8-sig"), f"{Path(conv_upload.name).stem}.csv", "text/csv")
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+            elif suffix == ".pdf":
+                if st.button("Extract PDF → Text", type="primary"):
+                    try:
+                        txt = pdf_to_text_bytes(conv_upload.getvalue())
+                        st.text_area("Extracted Text", txt[:10000], height=250)
+                        st.download_button("Download Text", txt.encode("utf-8"), f"{Path(conv_upload.name).stem}.txt", "text/plain")
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+            elif suffix == ".txt":
+                if st.button("Convert Text → PDF", type="primary"):
+                    try:
+                        out = text_to_pdf_bytes(conv_upload.getvalue().decode("utf-8", errors="ignore"), title=Path(conv_upload.name).stem)
+                        st.download_button("Download PDF", out, f"{Path(conv_upload.name).stem}.pdf", "application/pdf")
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+            else:
+                st.info("Choose PNG/JPG/CSV/XLSX/PDF/TXT")
+        else:
+            st.info("Upload a file to convert. Example: Photo of receipt → PDF for boss in 5 seconds!")
+    # ===== NEW TAB 5: PDF TOOLKIT =====
+    with tabs[4]:
+        st.subheader("📦 PDF Toolkit - Compress, Split, Watermark")
+        st.caption("WhatsApp won't send 50MB? Compress it! Need only page 2? Split it! Need CONFIDENTIAL? Watermark it!")
+        tool_upload = st.file_uploader("Upload PDF for Toolkit", type=["pdf"], key="toolkit_upload")
+        if tool_upload:
+            raw = tool_upload.getvalue()
+            try:
+                d = fitz.open(stream=raw, filetype="pdf")
+                total_pages = len(d)
+                d.close()
+            except Exception:
+                total_pages = 0
+            st.write(f"Pages: {total_pages} | Size: {raw.__len__()/1024:.1f} KB")
+            t1, t2, t3 = st.columns(3)
+            with t1:
+                st.markdown("**Compress PDF**")
+                if st.button("Compress Now", use_container_width=True):
+                    try:
+                        out = pdf_compress(raw)
+                        st.success(f"Done! Before: {len(raw)/1024:.1f} KB → After: {len(out)/1024:.1f} KB")
+                        st.download_button("Download Compressed PDF", out, f"{Path(tool_upload.name).stem}_compressed.pdf", "application/pdf")
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+            with t2:
+                st.markdown("**Split PDF**")
+                sp1 = st.number_input("From page", min_value=1, max_value=max(1, total_pages), value=1, key="split_from")
+                sp2 = st.number_input("To page", min_value=1, max_value=max(1, total_pages), value=max(1, total_pages), key="split_to")
+                if st.button("Split Now", use_container_width=True):
+                    try:
+                        out = pdf_split(raw, int(sp1), int(sp2))
+                        st.download_button("Download Split PDF", out, f"{Path(tool_upload.name).stem}_pages_{sp1}-{sp2}.pdf", "application/pdf")
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+            with t3:
+                st.markdown("**Watermark PDF**")
+                wm = st.text_input("Watermark text", value="CONFIDENTIAL", key="wm_text")
+                if st.button("Add Watermark", use_container_width=True):
+                    try:
+                        out = pdf_watermark(raw, wm)
+                        st.download_button("Download Watermarked PDF", out, f"{Path(tool_upload.name).stem}_watermarked.pdf", "application/pdf")
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+        else:
+            st.info("Upload a PDF to compress / split / watermark.")
+    # ===== NEW TAB 6: DAILY PLANNER =====
+    with tabs[5]:
+        st.subheader("⏰ Daily Planner + Timesheet - Use Every Morning & Night")
+        st.caption("Plan your day, log hours, send Daily Report PDF to boss/client.")
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            task_name = st.text_input("Task", placeholder="e.g. Clean client data", key="planner_task")
+        with col_b:
+            task_hours = st.number_input("Hours", min_value=0.0, max_value=24.0, value=1.0, step=0.5, key="planner_hours")
+        with col_c:
+            task_rate = st.number_input("Rate R/hour (optional)", min_value=0.0, value=150.0, step=10.0, key="planner_rate")
+        if st.button("➕ Add Task", type="primary"):
+            if not task_name.strip():
+                st.error("Enter task name.")
+            else:
+                st.session_state.daily_tasks.append({"Task": task_name.strip(), "Hours": float(task_hours), "Rate": float(task_rate), "Total": float(task_hours)*float(task_rate), "Done": False})
+                st.rerun()
+        if st.session_state.daily_tasks:
+            st.markdown("**Today's Tasks**")
+            total_h = sum(float(t["Hours"]) for t in st.session_state.daily_tasks)
+            total_m = sum(float(t["Total"]) for t in st.session_state.daily_tasks)
+            done_c = sum(1 for t in st.session_state.daily_tasks if t.get("Done"))
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Tasks", f"{len(st.session_state.daily_tasks)}")
+            c2.metric("Total Hours", f"{total_h:.1f}h")
+            c3.metric("Total Value", f"R{total_m:,.2f}")
+            for i, t in enumerate(st.session_state.daily_tasks):
+                cc1, cc2, cc3, cc4 = st.columns([3, 1, 1, 1])
+                cc1.write(f"{'✅' if t.get('Done') else '⬜'} {t['Task']}")
+                cc2.write(f"{t['Hours']}h")
+                cc3.write(f"R{t['Total']:,.2f}")
+                if cc4.button("Done" if not t.get("Done") else "Undo", key=f"done_{i}"):
+                    st.session_state.daily_tasks[i]["Done"] = not st.session_state.daily_tasks[i].get("Done", False)
+                    st.rerun()
+            if st.button("🗑️ Clear All Tasks"):
+                st.session_state.daily_tasks = []
+                st.rerun()
+            # Export Daily Report PDF
+            if st.button("📄 Export Daily Report PDF", type="primary"):
+                try:
+                    report_text = f"DAILY REPORT - {datetime.now().strftime('%d-%m-%Y')}\n\n"
+                    for t in st.session_state.daily_tasks:
+                        status = "DONE" if t.get("Done") else "PENDING"
+                        report_text += f"- {t['Task']} | {t['Hours']}h | R{t['Total']:,.2f} | {status}\n"
+                    report_text += f"\nTotal Hours: {total_h:.1f}h\nTotal Value: R{total_m:,.2f}\n\nGenerated with CleanData LAI"
+                    out = text_to_pdf_bytes(report_text, title="Daily Report")
+                    st.download_button("Download Daily Report PDF", out, "daily_report.pdf", "application/pdf")
+                except Exception as e:
+                    st.error(f"Failed: {e}")
+            # Send to Invoice - one click
+            if st.button("➡️ Send Total to Quick Invoice"):
+                st.session_state.invoice_items = [{"desc": f"Work - {t['Task']}", "qty": t["Hours"], "rate": t["Rate"]} for t in st.session_state.daily_tasks]
+                st.success("Sent to Quick Invoice! Go to 🧾 Quick Invoice tab.")
+        else:
+            st.info("No tasks yet. Add your first task for today!")
+    # ===== NEW TAB 7: QUICK INVOICE =====
+    with tabs[6]:
+        st.subheader("🧾 Quick Invoice - Get Paid in 30 Seconds")
+        st.caption("Fill, preview, download pro PDF invoice. SA VAT + Banking details included.")
+        ic1, ic2 = st.columns(2)
+        with ic1:
+            biz_name = st.text_input("Your Business Name", value=user.get("company", "") or "CleanData LAI", key="inv_biz")
+            biz_email = st.text_input("Your Email", value=email, key="inv_biz_email")
+            biz_phone = st.text_input("Your Phone", value="078 123 4567", key="inv_biz_phone")
+            banking = st.text_input("Banking Details", value="Capitec - Acc: 1234567890 - Branch: 470010", key="inv_banking")
+        with ic2:
+            client_name = st.text_input("Client Name", value="Thandi Nene", key="inv_client")
+            client_email = st.text_input("Client Email", value="thandi@gmail.com", key="inv_client_email")
+            inv_no = st.text_input("Invoice No", value=f"INV-{datetime.now().strftime('%Y%m%d')}-001", key="inv_no")
+            inv_date = st.text_input("Invoice Date (DD-MM-YYYY)", value=datetime.now().strftime("%d-%m-%Y"), key="inv_date")
+        st.markdown("**Invoice Items**")
+        # Edit items - simple: 3 rows editable
+        for idx, item in enumerate(st.session_state.invoice_items):
+            e1, e2, e3 = st.columns([3, 1, 1])
+            with e1:
+                new_desc = st.text_input(f"Description {idx+1}", value=item.get("desc", ""), key=f"inv_desc_{idx}")
+            with e2:
+                new_qty = st.number_input(f"Qty {idx+1}", min_value=0.0, value=float(item.get("qty", 1)), step=1.0, key=f"inv_qty_{idx}")
+            with e3:
+                new_rate = st.number_input(f"Rate R {idx+1}", min_value=0.0, value=float(item.get("rate", 0)), step=10.0, key=f"inv_rate_{idx}")
+            st.session_state.invoice_items[idx] = {"desc": new_desc, "qty": new_qty, "rate": new_rate}
+        b_add, b_clear = st.columns(2)
+        if b_add.button("➕ Add Item"):
+            st.session_state.invoice_items.append({"desc": "New Service", "qty": 1, "rate": 100.0})
+            st.rerun()
+        if b_clear.button("Clear Items"):
+            st.session_state.invoice_items = [{"desc": "Data Cleaning Service", "qty": 1, "rate": 250.0}]
+            st.rerun()
+        vat_on = st.checkbox("Add VAT (15%)", value=True, key="inv_vat")
+        notes = st.text_input("Notes / Payment Terms", value="Payment due in 7 days. Thank you!", key="inv_notes")
+        # Preview totals
+        try:
+            sub = sum(float(it["qty"])*float(it["rate"]) for it in st.session_state.invoice_items)
+            vat_amt = sub*0.15 if vat_on else 0.0
+            grand = sub + vat_amt
+            st.markdown(f"**Subtotal: R{sub:,.2f} | VAT: R{vat_amt:,.2f} | TOTAL: R{grand:,.2f}**")
+        except Exception:
+            sub, vat_amt, grand = 0, 0, 0
+        if st.button("🧾 Generate Invoice PDF", type="primary"):
+            try:
+                if not biz_name.strip() or not client_name.strip():
+                    st.error("Enter business name and client name.")
+                else:
+                    pdf_bytes = generate_invoice_pdf(biz_name, biz_email, biz_phone, banking, client_name, client_email, inv_no, inv_date, st.session_state.invoice_items, vat_on, 15.0, notes)
+                    st.success(f"Invoice ready! Total: R{grand:,.2f}")
+                    st.download_button("Download Invoice PDF", pdf_bytes, f"{inv_no}.pdf", "application/pdf", type="primary")
+            except Exception as e:
+                st.error(f"Failed: {e}")
+    with tabs[7]:
         st.subheader("Plans & account")
         st.write("Choose a plan when payment processing has been configured and verified.")
         for key, plan in PLANS.items():
